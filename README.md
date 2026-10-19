@@ -23,12 +23,18 @@ in later phases (see the development plan in the PyrixOS repository).
 ## Install
 
 ```sh
-pip install -e '../pybonsai[dev]' -e '.[dev]'
+pip install --config-settings editable_mode=strict -e '../pybonsai[dev]' -e '.[dev]'
 pybootstrap check
 ```
 
 The `dev` extra installs [pybootstrap](https://github.com/packetfive/pybootstrap)
 and the tools its gates drive (ruff, pyright, pytest with coverage).
+
+The repository's `src` directory is the package itself, mapped to its
+import name in `pyproject.toml`. Strict editable mode gives that mapping a
+real `lattice/` directory under `build/`, which pyright needs to find the
+package. Tests import the installed package, so install before running
+them.
 
 Python 3.12 or later is required. The distribution name is
 `pyrixos-lattice`; the import name is `lattice`.

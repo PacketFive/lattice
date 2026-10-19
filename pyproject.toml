@@ -31,8 +31,10 @@ lattice = "lattice.cli:main"
 [tool.setuptools.dynamic]
 version = { attr = "lattice.__version__" }
 
-[tool.setuptools.packages.find]
-where = ["src"]
+# The repository's src directory is the lattice package itself.
+[tool.setuptools]
+packages = ["lattice"]
+package-dir = { lattice = "src" }
 
 # Quality gates, run with 'pybootstrap check'. Sources, line length and
 # test paths are read from the tool tables below.
@@ -44,10 +46,15 @@ coverage-package = "lattice"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests"]
+src = ["tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+# Tests import the installed package by name, since src/ has no
+# lattice/ directory for ruff to discover it from.
+[tool.ruff.lint.isort]
+known-first-party = ["lattice"]
 
 [tool.pyright]
 pythonVersion = "3.12"
@@ -58,6 +65,4 @@ reportMissingTypeStubs = "none"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# Lets the suite run straight after a clone, before the package is installed.
-pythonpath = ["src"]
 addopts = "--cov-report=term-missing --import-mode=importlib"
