@@ -1,0 +1,63 @@
+# SPDX-License-Identifier: GPL-2.0
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyrixos-lattice"
+dynamic = ["version"]
+description = "Lattice, the PyrixOS package manager"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "GPL-2.0-only" }
+authors = [{ name = "PacketFive" }]
+dependencies = ["pybonsai"]
+
+[project.optional-dependencies]
+# Everything the quality gates need. The pybootstrap name on PyPI belongs to
+# an unrelated placeholder, so it is installed from its repository.
+dev = [
+  "pybootstrap @ git+https://github.com/packetfive/pybootstrap.git",
+  "ruff>=0.4",
+  "pyright>=1.1",
+  "pytest>=8",
+  "pytest-cov>=5",
+]
+
+[project.scripts]
+lattice = "lattice.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "lattice.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Quality gates, run with 'pybootstrap check'. Sources, line length and
+# test paths are read from the tool tables below.
+[tool.pybootstrap]
+gates = ["format", "lint", "typecheck", "test"]
+coverage-min = 80
+coverage-package = "lattice"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"
+include = ["src", "tests"]
+reportMissingImports = "error"
+reportMissingTypeStubs = "none"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Lets the suite run straight after a clone, before the package is installed.
+pythonpath = ["src"]
+addopts = "--cov-report=term-missing --import-mode=importlib"
