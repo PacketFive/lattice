@@ -7,9 +7,11 @@ the command does, a program can do too. A Lattice object holds only its
 settings and event handler; it keeps no state between calls and reads no
 settings from the machine on its own.
 
-Methods return immutable result objects and raise LatticeError
-subclasses. Each method states the phase of the development plan that
-implements it, and raises NotImplementedError until then.
+Methods return immutable result models (models.py) and raise LatticeError
+subclasses. Client (client.py) has the same methods and talks to the
+daemon instead; both satisfy the LatticeAPI protocol. Each method states
+the phase of the development plan that implements it, and raises
+NotImplementedError until then.
 
 Example::
 
@@ -26,7 +28,6 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
 
 import pybonsai
 from pybonsai import FrozenMap, Host, PyBonsaiError
@@ -34,58 +35,9 @@ from pybonsai import FrozenMap, Host, PyBonsaiError
 from .derivation import Derivation
 from .errors import EvaluationFailed
 from .events import EvaluationFinished, EvaluationStarted, EventHandler, emit
+from .models import BuildResult, Evaluation, GCResult, Generation
 from .settings import Settings
 from .stdlib import build_host
-
-
-@dataclass(frozen=True)
-class Evaluation:
-    """The result of evaluating one PyBonsai file.
-
-    ``names`` holds every top-level name the file assigns, in assignment
-    order. ``seconds`` is the evaluation time reported by section 15.
-    """
-
-    filename: str
-    names: FrozenMap
-    seconds: float
-
-    @property
-    def derivations(self) -> dict[str, Derivation]:
-        """Return the names bound to a Derivation, in assignment order."""
-        return {str(k): v for k, v in self.names.items() if isinstance(v, Derivation)}
-
-
-@dataclass(frozen=True)
-class BuildResult:
-    """The outcome of realising one derivation.
-
-    ``built`` is False when the path was already in the store or was
-    substituted from a cache instead of being built.
-    """
-
-    derivation: Derivation
-    store_path: str
-    built: bool
-    seconds: float
-
-
-@dataclass(frozen=True)
-class GCResult:
-    """The store paths one collection removed and the bytes it freed."""
-
-    removed: tuple[str, ...]
-    freed_bytes: int
-    seconds: float
-
-
-@dataclass(frozen=True)
-class Generation:
-    """One generation of a profile (section 13.1)."""
-
-    profile: str
-    number: int
-    store_path: str
 
 
 class Lattice:
@@ -118,7 +70,7 @@ class Lattice:
         fails, and OSError if it cannot be read.
         """
         filename = os.fspath(path)
-        emit(self.on_event, EvaluationStarted(filename))
+        emit(self.on_event, EvaluationStarted(filename=filename))
         start = time.perf_counter()
         try:
             names = pybonsai.evaluate_file(path, host=self._get_host())
@@ -128,7 +80,7 @@ class Lattice:
 
     def evaluate_source(self, source: str, filename: str = "<string>") -> Evaluation:
         """Evaluate PyBonsai source text, as evaluate does for a file. Phase 1."""
-        emit(self.on_event, EvaluationStarted(filename))
+        emit(self.on_event, EvaluationStarted(filename=filename))
         start = time.perf_counter()
         try:
             names = pybonsai.evaluate_source(source, filename, host=self._get_host())
@@ -137,10 +89,15 @@ class Lattice:
         return self._finish(filename, names, start)
 
     def _finish(self, filename: str, names: FrozenMap, start: float) -> Evaluation:
-        result = Evaluation(filename, names, time.perf_counter() - start)
+        derivations = {str(k): v for k, v in names.items() if isinstance(v, Derivation)}
+        result = Evaluation(
+            filename=filename, derivations=derivations, seconds=time.perf_counter() - start
+        )
         emit(
             self.on_event,
-            EvaluationFinished(filename, len(result.derivations), result.seconds),
+            EvaluationFinished(
+                filename=filename, derivations=len(derivations), seconds=result.seconds
+            ),
         )
         return result
 

@@ -1,44 +1,53 @@
 # SPDX-License-Identifier: GPL-2.0
 """Progress events reported by the Lattice library (RFC 0001 section 6.1).
 
-A program that embeds Lattice passes an ``on_event`` callable to Lattice
-and receives one Event per step, for example to drive its own progress
-display. Every event is also logged to the ``lattice`` logger at DEBUG
-level, so a program that only configures logging sees the same steps.
+A program passes an ``on_event`` callable to Lattice or Client and receives
+one Event per step, for example to drive its own progress display. Every
+event is also logged to the ``lattice`` logger at DEBUG level, so a program
+that only configures logging sees the same steps.
 
-Events carry plain values and are immutable. Later phases add events for
-builds, collection, switching and substitution.
+Events are immutable Pydantic models. The ``type`` field names the event,
+so the daemon can send events to a client as JSON and the client can
+rebuild the same objects. Later phases add events for builds, collection,
+switching and substitution.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from typing import Annotated, Literal
+
+from pydantic import Field, TypeAdapter
+
+from .models import Model
 
 logger = logging.getLogger("lattice")
 
 
-@dataclass(frozen=True)
-class Event:
+class Event(Model):
     """Base class for every progress event."""
 
 
-@dataclass(frozen=True)
 class EvaluationStarted(Event):
     """Evaluation of ``filename`` has started."""
 
+    type: Literal["evaluation_started"] = "evaluation_started"
     filename: str
 
 
-@dataclass(frozen=True)
 class EvaluationFinished(Event):
     """Evaluation of ``filename`` produced ``derivations`` derivations in ``seconds``."""
 
+    type: Literal["evaluation_finished"] = "evaluation_finished"
     filename: str
     derivations: int
     seconds: float
 
+
+AnyEvent = Annotated[EvaluationStarted | EvaluationFinished, Field(discriminator="type")]
+EVENTS: TypeAdapter[EvaluationStarted | EvaluationFinished] = TypeAdapter(AnyEvent)
+"""Validates any event from its JSON form, choosing the class by ``type``."""
 
 EventHandler = Callable[[Event], None]
 

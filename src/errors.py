@@ -4,6 +4,9 @@
 Every error Lattice raises on purpose is a LatticeError, so a program that
 embeds Lattice can catch one type. Errors from PyBonsai are wrapped in
 EvaluationFailed, with the original kept as ``error`` and as the cause.
+
+A Client raises the same classes for errors the daemon reports, so a
+program handles errors the same way whether it uses Lattice or Client.
 """
 
 from __future__ import annotations
@@ -24,13 +27,15 @@ class EvaluationFailed(LatticeError):
 
     ``error`` is the PyBonsaiError raised by PyBonsai: RejectedSyntax,
     EvaluationError or LimitExceeded. Its message, including the file,
-    line and column, is the message of this exception.
+    line and column, is the message of this exception. When the error was
+    raised by the daemon and received by a Client, only the message
+    crosses the connection and ``error`` is None.
     """
 
-    def __init__(self, error: PyBonsaiError) -> None:
-        """Wrap ``error`` and use its text as the message."""
+    def __init__(self, error: PyBonsaiError | str) -> None:
+        """Wrap ``error``, or take a message received from the daemon."""
         super().__init__(str(error))
-        self.error = error
+        self.error = error if isinstance(error, PyBonsaiError) else None
 
 
 class BuildFailed(LatticeError):
@@ -50,3 +55,15 @@ class StoreError(LatticeError):
 
 class SubstitutionFailed(LatticeError):
     """A cached path was missing, unsigned or did not match its hashes (section 14). Phase 5."""
+
+
+class AuthenticationFailed(LatticeError):
+    """The daemon could not establish who the caller is (section 6.2)."""
+
+
+class PermissionDenied(LatticeError):
+    """The caller is known to the daemon but may not run this operation (section 6.2)."""
+
+
+class ProtocolError(LatticeError):
+    """A request or reply did not follow the daemon protocol (section 6.2)."""

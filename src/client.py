@@ -1,0 +1,281 @@
+# SPDX-License-Identifier: GPL-2.0
+"""The daemon client and the interface it shares with Lattice (RFC 0001 section 6.2).
+
+Client talks to ``lattice daemon`` over its Unix socket or, remotely, over
+HTTPS. It has the same methods, results and errors as Lattice, so a program
+written against LatticeAPI works with either::
+
+    from lattice import Client, Lattice, LatticeAPI
+
+    def show(api: LatticeAPI) -> None:
+        for name, drv in api.evaluate("hello.pyb").derivations.items():
+            print(name, drv.store_path)
+
+    show(Lattice())                       # in this process
+    show(Client())                        # through the local daemon
+    show(Client("https://builder.example:7420", ca_file="ca.pem",
+                cert_file="me.pem", key_file="me.key"))
+
+Client uses the JSON-RPC interface. It opens one connection per call and
+keeps no other state, so one Client may be used from several threads.
+"""
+
+from __future__ import annotations
+
+import http.client
+import json
+import os
+import socket
+import ssl
+import urllib.parse
+from collections.abc import Iterable
+from pathlib import Path
+from typing import Any, Protocol, runtime_checkable
+
+from pydantic import BaseModel, ValidationError
+
+from .derivation import Derivation
+from .errors import ProtocolError, SettingsError
+from .events import EVENTS, EventHandler, emit
+from .models import BuildResult, Evaluation, GCResult, Generation, parse
+from .protocol import (
+    EVENT_METHOD,
+    INFO_PATH,
+    JSON,
+    NDJSON,
+    RPC_PATH,
+    DerivationParams,
+    ErrorObject,
+    EvaluateSourceParams,
+    NoParams,
+    PushParams,
+    ServerInfo,
+    SwitchParams,
+    raise_error,
+)
+from .settings import DEFAULT_SOCKET
+
+DEFAULT_URL = f"unix://{DEFAULT_SOCKET}"
+
+
+@runtime_checkable
+class LatticeAPI(Protocol):
+    """The operations Lattice and Client both provide (section 6.1)."""
+
+    def evaluate(self, path: str | os.PathLike[str]) -> Evaluation:
+        """Evaluate the PyBonsai file at ``path``."""
+        ...
+
+    def evaluate_source(self, source: str, filename: str = "<string>") -> Evaluation:
+        """Evaluate PyBonsai source text."""
+        ...
+
+    def build(self, drv: Derivation) -> BuildResult:
+        """Realise ``drv`` and its inputs."""
+        ...
+
+    def check(self, drv: Derivation) -> BuildResult:
+        """Rebuild the registered output of ``drv`` and compare it."""
+        ...
+
+    def gc(self) -> GCResult:
+        """Remove every store path not reachable from a root."""
+        ...
+
+    def switch(self, profile: str, drv: Derivation) -> Generation:
+        """Make ``drv`` the current generation of ``profile``."""
+        ...
+
+    def push(self, paths: Iterable[str], cache: str) -> None:
+        """Sign and upload store paths and their provenance to ``cache``."""
+        ...
+
+
+class _UnixConnection(http.client.HTTPConnection):
+    def __init__(self, path: str, timeout: float | None) -> None:
+        super().__init__("localhost", timeout=timeout)
+        self._path = path
+        self._timeout = timeout
+
+    def connect(self) -> None:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(self._timeout)
+        try:
+            sock.connect(self._path)
+        except OSError:
+            sock.close()
+            raise
+        self.sock = sock
+
+
+class Client:
+    """A connection to ``lattice daemon``.
+
+    ``url`` is ``unix:///path/to/socket`` (the default is the daemon's
+    standard socket) or ``https://host:port``; plain ``http`` is refused.
+    For HTTPS, ``ca_file`` verifies the daemon's certificate (the system
+    store is used if it is None), and the caller authenticates with
+    ``cert_file`` and ``key_file``, with ``token``, or with both. Over the
+    Unix socket the daemon identifies the caller from the kernel, so no
+    credentials are passed.
+
+    ``timeout`` applies to each socket operation and is None (no limit) by
+    default, because a build may take hours. ``on_event`` receives the
+    daemon's progress events as they happen.
+    """
+
+    def __init__(
+        self,
+        url: str = DEFAULT_URL,
+        *,
+        ca_file: str | None = None,
+        cert_file: str | None = None,
+        key_file: str | None = None,
+        token: str | None = None,
+        timeout: float | None = None,
+        on_event: EventHandler | None = None,
+    ) -> None:
+        """Check the URL and credentials and prepare TLS. Nothing is connected yet."""
+        parts = urllib.parse.urlsplit(url)
+        self.url = url
+        self.timeout = timeout
+        self.on_event = on_event
+        self._token = token
+        self._ssl: ssl.SSLContext | None = None
+        if parts.scheme == "unix":
+            if not parts.path:
+                raise SettingsError(f"{url!r} names no socket path")
+            if token is not None or cert_file is not None:
+                raise SettingsError("credentials are not used over the Unix socket")
+            self._path = parts.path
+        elif parts.scheme == "https":
+            if parts.hostname is None:
+                raise SettingsError(f"{url!r} names no host")
+            self._host = parts.hostname
+            self._port = parts.port or 443
+            context = ssl.create_default_context(cafile=ca_file)
+            context.minimum_version = ssl.TLSVersion.TLSv1_3
+            if cert_file is not None:
+                context.load_cert_chain(cert_file, key_file)
+            self._ssl = context
+        else:
+            raise SettingsError(f"{url!r}: the daemon URL must start with unix:// or https://")
+
+    def _connect(self) -> http.client.HTTPConnection:
+        if self._ssl is None:
+            return _UnixConnection(self._path, self.timeout)
+        return http.client.HTTPSConnection(
+            self._host, self._port, timeout=self.timeout, context=self._ssl
+        )
+
+    def _headers(self, accept: str) -> dict[str, str]:
+        headers = {"Content-Type": JSON, "Accept": accept}
+        if self._token is not None:
+            headers["Authorization"] = f"Bearer {self._token}"
+        return headers
+
+    @staticmethod
+    def _http_error(response: http.client.HTTPResponse) -> ProtocolError:
+        """Raise the error in a non-200 reply, or return one if it has none."""
+        body = response.read()
+        try:
+            error = parse(ErrorObject, json.loads(body)["error"])
+        except (ValueError, KeyError, TypeError):
+            return ProtocolError(f"daemon replied with HTTP {response.status}")
+        raise_error(error)
+
+    def _call(self, method: str, params: BaseModel) -> Any:
+        stream = self.on_event is not None
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "method": method,
+                "params": params.model_dump(mode="json"),
+                "id": 1,
+            }
+        ).encode()
+        connection = self._connect()
+        try:
+            connection.request("POST", RPC_PATH, body, self._headers(NDJSON if stream else JSON))
+            response = connection.getresponse()
+            if response.status != 200:
+                raise self._http_error(response)
+            reply: Any = None
+            try:
+                if stream:
+                    for line in response:
+                        message = json.loads(line)
+                        if message.get("method") == EVENT_METHOD:
+                            emit(self.on_event, EVENTS.validate_json(json.dumps(message["params"])))
+                        else:
+                            reply = message
+                else:
+                    reply = json.loads(response.read())
+            except (ValueError, KeyError, TypeError, ValidationError) as error:
+                raise ProtocolError(f"invalid reply from the daemon: {error}") from error
+        finally:
+            connection.close()
+        if not isinstance(reply, dict):
+            raise ProtocolError("the daemon closed the connection without a reply")
+        if "error" in reply:
+            try:
+                error = parse(ErrorObject, reply["error"])
+            except ValidationError as exc:
+                raise ProtocolError("invalid error object from the daemon") from exc
+            raise_error(error)
+        if "result" not in reply:
+            raise ProtocolError("reply has neither result nor error")
+        return reply["result"]
+
+    @staticmethod
+    def _result[M: BaseModel](model: type[M], value: object) -> M:
+        try:
+            return parse(model, value)
+        except ValidationError as error:
+            raise ProtocolError(f"invalid {model.__name__} from the daemon: {error}") from error
+
+    def info(self) -> ServerInfo:
+        """Return the daemon's version, API version and method names."""
+        connection = self._connect()
+        try:
+            connection.request("GET", INFO_PATH, headers=self._headers(JSON))
+            response = connection.getresponse()
+            if response.status != 200:
+                raise self._http_error(response)
+            value = json.loads(response.read())
+        finally:
+            connection.close()
+        return self._result(ServerInfo, value)
+
+    def evaluate(self, path: str | os.PathLike[str]) -> Evaluation:
+        """Read the file at ``path`` here and have the daemon evaluate its text."""
+        source = Path(path).read_text(encoding="utf-8")
+        return self.evaluate_source(source, os.fspath(path))
+
+    def evaluate_source(self, source: str, filename: str = "<string>") -> Evaluation:
+        """Have the daemon evaluate PyBonsai source text."""
+        params = EvaluateSourceParams(source=source, filename=filename)
+        return self._result(Evaluation, self._call("evaluate_source", params))
+
+    def build(self, drv: Derivation) -> BuildResult:
+        """Have the daemon realise ``drv`` and its inputs."""
+        params = DerivationParams(derivation=drv)
+        return self._result(BuildResult, self._call("build", params))
+
+    def check(self, drv: Derivation) -> BuildResult:
+        """Have the daemon rebuild ``drv`` and compare the outputs."""
+        params = DerivationParams(derivation=drv)
+        return self._result(BuildResult, self._call("check", params))
+
+    def gc(self) -> GCResult:
+        """Have the daemon collect garbage. Needs the admin role."""
+        return self._result(GCResult, self._call("gc", NoParams()))
+
+    def switch(self, profile: str, drv: Derivation) -> Generation:
+        """Have the daemon make ``drv`` the current generation of ``profile``."""
+        params = SwitchParams(profile=profile, derivation=drv)
+        return self._result(Generation, self._call("switch", params))
+
+    def push(self, paths: Iterable[str], cache: str) -> None:
+        """Have the daemon push ``paths`` to ``cache``. Needs the admin role."""
+        self._call("push", PushParams(paths=tuple(paths), cache=cache))

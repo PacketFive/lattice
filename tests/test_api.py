@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0
 """Library interface tests: RFC 0001 section 6.1."""
 
-import dataclasses
 import logging
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 import lattice
 from lattice import (
@@ -15,11 +15,13 @@ from lattice import (
     EvaluationStarted,
     Event,
     Lattice,
+    LatticeAPI,
     LatticeError,
     Settings,
     SettingsError,
 )
 from lattice.events import emit
+from lattice.settings import ClientGrant, DaemonSettings, TokenGrant
 
 not_implemented = pytest.mark.xfail(raises=NotImplementedError, reason="not implemented yet")
 
@@ -44,7 +46,7 @@ def test_settings_defaults() -> None:
 
 
 def test_settings_are_immutable() -> None:
-    with pytest.raises(dataclasses.FrozenInstanceError):
+    with pytest.raises(ValidationError):
         Settings().sandbox_backend = "oci"  # type: ignore[misc]
 
 
@@ -54,13 +56,38 @@ def test_settings_accept_rfc_backends(backend: str) -> None:
 
 
 def test_settings_reject_unknown_backend() -> None:
-    with pytest.raises(SettingsError, match="unknown sandbox backend 'docker'"):
+    with pytest.raises(SettingsError, match="sandbox_backend"):
         Settings(sandbox_backend="docker")  # type: ignore[arg-type]
 
 
 def test_settings_reject_list_of_substituters() -> None:
-    with pytest.raises(SettingsError, match="substituters must be a tuple"):
+    with pytest.raises(SettingsError, match="substituters"):
         Settings(substituters=["https://cache"])  # type: ignore[arg-type]
+
+
+def test_settings_reject_unknown_field() -> None:
+    with pytest.raises(SettingsError, match="backend"):
+        Settings(backend="oci")  # type: ignore[call-arg]
+
+
+def test_remote_api_needs_tls() -> None:
+    with pytest.raises(SettingsError, match="TLS only"):
+        DaemonSettings(listen="0.0.0.0:7420")
+
+
+def test_remote_api_needs_a_credential() -> None:
+    with pytest.raises(SettingsError, match="clients or tokens"):
+        DaemonSettings(listen="[::1]:7420", tls_cert="c.pem", tls_key="k.pem")
+
+
+def test_clients_need_a_ca() -> None:
+    with pytest.raises(SettingsError, match="tls_client_ca"):
+        DaemonSettings(clients=(ClientGrant(common_name="ci"),))
+
+
+def test_token_grant_stores_a_digest() -> None:
+    with pytest.raises(SettingsError, match="sha256"):
+        TokenGrant(name="ci", sha256="not-a-digest")
 
 
 def test_settings_error_is_lattice_error() -> None:
@@ -74,7 +101,7 @@ def test_lattice_defaults_settings() -> None:
 
 def test_emit_calls_handler_and_logs(caplog: pytest.LogCaptureFixture) -> None:
     seen: list[Event] = []
-    event = EvaluationStarted("x.pyb")
+    event = EvaluationStarted(filename="x.pyb")
     with caplog.at_level(logging.DEBUG, logger="lattice"):
         emit(seen.append, event)
     assert seen == [event]
@@ -82,7 +109,12 @@ def test_emit_calls_handler_and_logs(caplog: pytest.LogCaptureFixture) -> None:
 
 
 def test_emit_without_handler_only_logs() -> None:
-    emit(None, EvaluationStarted("x.pyb"))
+    emit(None, EvaluationStarted(filename="x.pyb"))
+
+
+def test_lattice_satisfies_api_protocol() -> None:
+    api: LatticeAPI = Lattice()
+    assert isinstance(api, LatticeAPI)
 
 
 @not_implemented
@@ -91,8 +123,7 @@ def test_evaluate_source_returns_derivations() -> None:
     result = Lattice(on_event=events.append).evaluate_source(SOURCE, "t.pyb")
     assert list(result.derivations) == ["a"]
     assert isinstance(result.derivations["a"], Derivation)
-    assert result.names["n"] == 1
-    assert events[0] == EvaluationStarted("t.pyb")
+    assert events[0] == EvaluationStarted(filename="t.pyb")
     assert isinstance(events[-1], EvaluationFinished)
     assert events[-1].derivations == 1
 

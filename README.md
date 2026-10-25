@@ -14,9 +14,11 @@ library (`derivation`, `fetch_url`, `stack`, `profile`) through a
 
 ## Status
 
-Phase 1 skeleton: derivations, the standard library, the `Lattice`
-library interface and `lattice eval`.
-Function bodies raise `NotImplementedError` and the tests are marked as
+Phase 1: derivations, the standard library, the `Lattice` library
+interface, the daemon with its JSON-RPC and REST interface, `Client` and
+`lattice eval`. The daemon, protocol and client work and are tested over a
+Unix socket and TLS.
+Evaluation and derivation function bodies raise `NotImplementedError` and the tests are marked as
 expected failures until the code is written. The sandbox, store,
 dependency database, garbage collector, profiles and binary caches follow
 in later phases (see the development plan in the PyrixOS repository).
@@ -37,7 +39,8 @@ real `lattice/` directory under `build/`, which pyright needs to find the
 package. Tests import the installed package, so install before running
 them.
 
-Python 3.12 or later is required. The distribution name is
+Python 3.12 or later is required. The only runtime dependencies are
+PyBonsai and [Pydantic](https://docs.pydantic.dev/) 2. The distribution name is
 `pyrixos-lattice`; the import name is `lattice`.
 
 ## Use
@@ -66,12 +69,52 @@ else:
 The `lattice` command is a thin wrapper around the `Lattice` class, so a
 program can do everything the command does. `Lattice` reads no settings
 from the machine on its own, keeps no state between calls, returns
-immutable result objects and raises subclasses of `LatticeError`. The
+immutable Pydantic data models and raises subclasses of `LatticeError`. The
 optional `on_event` callable receives a progress event for each step, and
 the same events are logged to the `lattice` logger. The package ships
 type hints (PEP 561). The names in `lattice.__all__` are the public
 interface; from release 1.0 they follow semantic versioning, and a name is
 removed only after one minor release of `DeprecationWarning`.
+
+Through the daemon, from the same machine or another one:
+
+```python
+from lattice import Client
+
+local = Client()  # unix:///run/lattice/daemon.sock
+remote = Client("https://builder.example:7420", ca_file="ca.pem",
+                cert_file="me.pem", key_file="me.key")
+result = remote.evaluate("hello.pyb")
+```
+
+`Client` has the same methods, results and errors as `Lattice`, and both
+satisfy the `LatticeAPI` protocol. `Client.evaluate` reads the file
+locally and sends its text, because the daemon never opens a path named by
+a caller. A bearer token can be passed as `token=` instead of a client
+certificate.
+
+`lattice daemon` serves one HTTP interface on its Unix socket and,
+when `Settings.daemon.listen` is set, over TLS 1.3:
+
+| Request | Style |
+| --- | --- |
+| `POST /v1/rpc` | JSON-RPC 2.0, with batches, notifications and progress events as NDJSON when the client sends `Accept: application/x-ndjson` |
+| `POST /v1/<method>` | REST, with the parameters as the JSON body |
+| `GET /v1/info` | Versions and method names |
+
+```sh
+curl --unix-socket /run/lattice/daemon.sock http://localhost/v1/info
+curl --cacert ca.pem -H "Authorization: Bearer $LATTICE_TOKEN" \
+     -d '{"source": "...", "filename": "hello.pyb"}' \
+     https://builder.example:7420/v1/evaluate_source
+```
+
+On the socket, root, the daemon's user and members of `lattice-admins`
+are admins, and members of `lattice-users` are users. Remotely, a client
+certificate common name or the SHA-256 digest of a token is granted a
+role in the daemon settings. Users may evaluate, build, check and switch
+`per-user/<name>` profiles; admins may also collect garbage, push and
+switch any profile. RFC 0001 section 6.2 is the specification.
 
 Methods for later phases (`build`, `check`, `gc`, `switch`, `push`)
 already exist with their final signatures and raise `NotImplementedError`
@@ -81,13 +124,18 @@ until their phase is complete.
 
 | Module | Role |
 | --- | --- |
-| `api.py` | The `Lattice` class and its result types |
-| `settings.py` | `Settings`, what one machine uses to build and fetch |
+| `api.py` | The `Lattice` class |
+| `models.py` | Pydantic result models, roles and the derivation wire form |
+| `settings.py` | `Settings` and `DaemonSettings`, what one machine uses to build, fetch and serve |
 | `errors.py` | `LatticeError` and its subclasses |
 | `events.py` | Progress events passed to `on_event` and logged |
 | `derivation.py` | The Derivation type, canonical JSON, hashes and store paths |
 | `stdlib.py` | Standard library functions and the PyBonsai host |
-| `cli.py` | The `lattice` command, a wrapper around `Lattice` |
+| `protocol.py` | JSON-RPC 2.0 and REST messages, parameters and error codes |
+| `server.py` | Method table, permission checks and request dispatch |
+| `transport.py` | `Daemon`: the HTTP server on the Unix socket and TLS, and caller identification |
+| `client.py` | `Client` and the `LatticeAPI` protocol |
+| `cli.py` | The `lattice` command, a wrapper around `Lattice` and `Client` |
 
 ## License
 

@@ -12,7 +12,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "GPL-2.0-only" }
 authors = [{ name = "PacketFive" }]
-dependencies = ["pybonsai"]
+dependencies = ["pybonsai", "pydantic>=2.6,<3"]
 
 [project.optional-dependencies]
 # Everything the quality gates need. The pybootstrap name on PyPI belongs to
@@ -60,8 +60,9 @@ select = ["E", "F", "I", "UP", "B", "D", "S"]
 convention = "pep257"
 
 [tool.ruff.lint.per-file-ignores]
-# Tests use assert, and test names describe themselves.
-"tests/*" = ["S101", "D"]
+# Tests use assert, fixed test tokens and the openssl command, and test
+# names describe themselves.
+"tests/*" = ["S101", "S105", "S106", "S603", "S607", "D"]
 
 # Tests import the installed package by name, since src/ has no
 # lattice/ directory for ruff to discover it from.
