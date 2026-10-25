@@ -36,6 +36,10 @@ version = { attr = "lattice.__version__" }
 packages = ["lattice"]
 package-dir = { lattice = "src" }
 
+# PEP 561 marker: the package ships its own type hints.
+[tool.setuptools.package-data]
+lattice = ["py.typed"]
+
 # Quality gates, run with 'pybootstrap check'. Sources, line length and
 # test paths are read from the tool tables below.
 [tool.pybootstrap]

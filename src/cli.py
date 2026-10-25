@@ -8,6 +8,9 @@ Phase 1 has one subcommand::
 It evaluates the file and prints every top-level derivation with its store
 path and canonical JSON. Nothing is built. Later phases add ``build``,
 ``gc``, ``switch``, ``push`` and ``materialise``.
+
+Every subcommand calls one method of lattice.Lattice and only formats its
+result, so the command and the library always behave the same way.
 """
 
 from __future__ import annotations
@@ -25,11 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
-    """Evaluate ``args.file`` with pybonsai.evaluate_file and stdlib.build_host().
+    """Evaluate ``args.file`` with Lattice().evaluate.
 
-    For each top-level name bound to a Derivation, in assignment order,
-    print ``<store path> <canonical JSON>``. Return 0 on success. On a
-    PyBonsaiError print the error to stderr and return 1.
+    For each entry of Evaluation.derivations, in assignment order, print
+    ``<store path> <canonical JSON>``. Return 0 on success. On a
+    LatticeError print the error to stderr and return 1.
     """
     raise NotImplementedError
 

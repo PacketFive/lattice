@@ -14,7 +14,8 @@ library (`derivation`, `fetch_url`, `stack`, `profile`) through a
 
 ## Status
 
-Phase 1 skeleton: derivations, the standard library and `lattice eval`.
+Phase 1 skeleton: derivations, the standard library, the `Lattice`
+library interface and `lattice eval`.
 Function bodies raise `NotImplementedError` and the tests are marked as
 expected failures until the code is written. The sandbox, store,
 dependency database, garbage collector, profiles and binary caches follow
@@ -41,24 +42,52 @@ Python 3.12 or later is required. The distribution name is
 
 ## Use
 
+From the command line:
+
 ```sh
 lattice eval hello.pyb
 ```
 
-```python
-from pybonsai import evaluate_file
-from lattice.stdlib import build_host
+From Python, in your own tools:
 
-names = evaluate_file("hello.pyb", host=build_host())
+```python
+from lattice import Lattice, LatticeError, Settings
+
+lattice = Lattice(Settings(sandbox_backend="namespaces"), on_event=print)
+try:
+    result = lattice.evaluate("hello.pyb")
+except LatticeError as error:
+    print(error)
+else:
+    for name, drv in result.derivations.items():
+        print(name, drv.store_path)
 ```
+
+The `lattice` command is a thin wrapper around the `Lattice` class, so a
+program can do everything the command does. `Lattice` reads no settings
+from the machine on its own, keeps no state between calls, returns
+immutable result objects and raises subclasses of `LatticeError`. The
+optional `on_event` callable receives a progress event for each step, and
+the same events are logged to the `lattice` logger. The package ships
+type hints (PEP 561). The names in `lattice.__all__` are the public
+interface; from release 1.0 they follow semantic versioning, and a name is
+removed only after one minor release of `DeprecationWarning`.
+
+Methods for later phases (`build`, `check`, `gc`, `switch`, `push`)
+already exist with their final signatures and raise `NotImplementedError`
+until their phase is complete.
 
 ## Layout
 
 | Module | Role |
 | --- | --- |
+| `api.py` | The `Lattice` class and its result types |
+| `settings.py` | `Settings`, what one machine uses to build and fetch |
+| `errors.py` | `LatticeError` and its subclasses |
+| `events.py` | Progress events passed to `on_event` and logged |
 | `derivation.py` | The Derivation type, canonical JSON, hashes and store paths |
 | `stdlib.py` | Standard library functions and the PyBonsai host |
-| `cli.py` | The `lattice` command |
+| `cli.py` | The `lattice` command, a wrapper around `Lattice` |
 
 ## License
 
