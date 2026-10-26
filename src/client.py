@@ -48,18 +48,23 @@ from .protocol import (
     ErrorObject,
     EvaluateSourceParams,
     NoParams,
+    PathParams,
     PushParams,
+    RootNameParams,
+    RootParams,
     ServerInfo,
     SwitchParams,
     raise_error,
 )
 from .sandbox import BackendStatus, OciConfig
 from .settings import DEFAULT_SOCKET
+from .store import BuildPlan, GCRootInfo, StorePathInfo, VerifyResult
 
 DEFAULT_URL = f"unix://{DEFAULT_SOCKET}"
 
 
 _BACKEND_STATUSES = TypeAdapter(tuple[BackendStatus, ...])
+_ROOTS = TypeAdapter(tuple[GCRootInfo, ...])
 
 
 @runtime_checkable
@@ -82,6 +87,18 @@ class LatticeAPI(Protocol):
         """Rebuild the registered output of ``drv`` and compare it."""
         ...
 
+    def plan(self, drv: Derivation) -> BuildPlan:
+        """List what building ``drv`` would download, build or reuse."""
+        ...
+
+    def path_info(self, path: str) -> StorePathInfo:
+        """Return what the store database records about ``path``."""
+        ...
+
+    def verify(self, path: str) -> VerifyResult:
+        """Hash ``path`` again and compare with the database."""
+        ...
+
     def sandbox_config(self, drv: Derivation) -> OciConfig:
         """Describe the sandbox that would build ``drv`` as an OCI runtime configuration."""
         ...
@@ -92,6 +109,18 @@ class LatticeAPI(Protocol):
 
     def gc(self) -> GCResult:
         """Remove every store path not reachable from a root."""
+        ...
+
+    def add_root(self, name: str, path: str) -> GCRootInfo:
+        """Keep ``path`` under the root ``name``."""
+        ...
+
+    def remove_root(self, name: str) -> GCRootInfo:
+        """Remove the root ``name``."""
+        ...
+
+    def roots(self) -> tuple[GCRootInfo, ...]:
+        """Return every root."""
         ...
 
     def switch(self, profile: str, drv: Derivation) -> Generation:
@@ -279,6 +308,19 @@ class Client:
         params = DerivationParams(derivation=drv)
         return self._result(BuildResult, self._call("check", params))
 
+    def plan(self, drv: Derivation) -> BuildPlan:
+        """Have the daemon list what building ``drv`` would download, build or reuse."""
+        params = DerivationParams(derivation=drv)
+        return self._result(BuildPlan, self._call("plan", params))
+
+    def path_info(self, path: str) -> StorePathInfo:
+        """Have the daemon report what its store database records about ``path``."""
+        return self._result(StorePathInfo, self._call("path_info", PathParams(path=path)))
+
+    def verify(self, path: str) -> VerifyResult:
+        """Have the daemon hash ``path`` again and compare with its database."""
+        return self._result(VerifyResult, self._call("verify", PathParams(path=path)))
+
     def sandbox_config(self, drv: Derivation) -> OciConfig:
         """Have the daemon describe the sandbox that would build ``drv``."""
         params = DerivationParams(derivation=drv)
@@ -295,6 +337,23 @@ class Client:
     def gc(self) -> GCResult:
         """Have the daemon collect garbage. Needs the admin role."""
         return self._result(GCResult, self._call("gc", NoParams()))
+
+    def add_root(self, name: str, path: str) -> GCRootInfo:
+        """Have the daemon keep ``path`` under the root ``name``."""
+        params = RootParams(name=name, path=path)
+        return self._result(GCRootInfo, self._call("add_root", params))
+
+    def remove_root(self, name: str) -> GCRootInfo:
+        """Have the daemon remove the root ``name``."""
+        return self._result(GCRootInfo, self._call("remove_root", RootNameParams(name=name)))
+
+    def roots(self) -> tuple[GCRootInfo, ...]:
+        """Return every root of the daemon's store."""
+        value = self._call("roots", NoParams())
+        try:
+            return _ROOTS.validate_json(json.dumps(value))
+        except ValidationError as error:
+            raise ProtocolError(f"invalid roots from the daemon: {error}") from error
 
     def switch(self, profile: str, drv: Derivation) -> Generation:
         """Have the daemon make ``drv`` the current generation of ``profile``."""

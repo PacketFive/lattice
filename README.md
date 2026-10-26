@@ -25,8 +25,15 @@ network, PID, UTS and IPC namespaces, with no capabilities, no new
 privileges, a seccomp filter and a fixed environment, and sees only its
 declared inputs, read-only. `lattice sandbox-config` prints the sandbox of
 a derivation as an OCI runtime configuration, and `lattice backend-status`
-reports which backends this machine can run. The OCI and microVM backends,
-the store, dependency database, garbage collector, profiles and binary
+reports which backends this machine can run.
+
+Phase 3: the store. `lattice build` builds a derivation and its inputs,
+up to `max_jobs` at once, publishes each output atomically and read-only,
+and records it with its run-time references in an SQLite database.
+`fetch_url` derivations are downloaded and checked against their SHA-256
+digest. `lattice check` builds a registered derivation again and reports
+the files that differ, and `lattice gc` removes every path that no root and
+no running process uses. The OCI and microVM backends, profiles and binary
 caches follow in later phases (see the development plan in the PyrixOS
 repository).
 
@@ -61,7 +68,23 @@ lattice --remote https://builder.example:7420 --ca ca.pem eval hello.pyb
 ```
 
 `eval` prints one line per derivation: its store path and its canonical
-JSON. `lattice sandbox-config FILE [NAME]` prints the OCI configuration of
+JSON.
+
+```sh
+lattice plan hello.pyb hello        # what a build would reuse, fetch or build
+lattice build hello.pyb hello       # prints the store path of each output
+lattice check hello.pyb hello       # or: lattice build --check hello.pyb hello
+lattice add-root per-user/me/hello /lattice/store/<hash>-hello
+lattice roots
+lattice path-info /lattice/store/<hash>-hello
+lattice verify /lattice/store/<hash>-hello   # exits with 1 if the contents changed
+lattice remove-root per-user/me/hello
+lattice gc
+```
+
+Without `NAME`, a command that takes `FILE [NAME]` uses the only derivation
+the file defines. Build progress is printed on standard error. A build adds
+no root, so its outputs are kept by the next `gc` only if a root names them. `lattice sandbox-config FILE [NAME]` prints the OCI configuration of
 one derivation's sandbox, and `lattice backend-status` reports each
 sandbox backend and, if one cannot run, why. It exits with 1 and a message on standard error if the file is
 rejected or fails. `--remote` reads a bearer token from the `LATTICE_TOKEN`
@@ -74,6 +97,10 @@ the file given with `--settings`. Without a file the defaults apply.
 sandbox_backend = "namespaces"
 substituters = ["https://cache.example.org"]
 trusted_keys = ["cache.example.org-1:..."]
+
+[store]
+root = "/lattice"     # store, staging and database live below this
+max_jobs = 4          # derivations built at once, 1 by default
 
 [sandbox]
 timeout = 3600
@@ -152,12 +179,12 @@ curl --cacert ca.pem -H "Authorization: Bearer $LATTICE_TOKEN" \
 On the socket, root, the daemon's user and members of `lattice-admins`
 are admins, and members of `lattice-users` are users. Remotely, a client
 certificate common name or the SHA-256 digest of a token is granted a
-role in the daemon settings. Users may evaluate, build, check and switch
-`per-user/<name>` profiles; admins may also collect garbage, push and
-switch any profile. RFC 0001 section 6.2 is the specification.
+role in the daemon settings. Users may evaluate, plan, build, check, read
+path information, verify and list roots, and may add, remove and switch
+only roots and profiles under `per-user/<name>`; admins may also collect
+garbage, push and change any root or profile. RFC 0001 section 6.2 is the specification.
 
-Methods for later phases (`build`, `check`, `gc`, `switch`, `push`)
-already exist with their final signatures and raise `NotImplementedError`
+Methods for later phases (`switch`, `push`) already exist with their final signatures and raise `NotImplementedError`
 until their phase is complete.
 
 ## Layout
@@ -177,6 +204,8 @@ until their phase is complete.
 | `client.py` | `Client` and the `LatticeAPI` protocol |
 | `cli.py` | The `lattice` command, a wrapper around `Lattice` and `Client` |
 | `sandbox/` | The build sandbox: its description, seccomp filter, environment, namespace backend, build runner and backend probe |
+| `store/` | The store: layout, locks, content hashes, reference scanning, the database, publication, downloads, the builder and the garbage collector |
+| `procscan.py` | Finds the store paths that running processes use |
 
 ## License
 

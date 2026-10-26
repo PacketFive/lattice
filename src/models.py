@@ -55,12 +55,14 @@ class Evaluation(Model):
 class BuildResult(Model):
     """The outcome of realising one derivation.
 
-    ``built`` is False when the path was already in the store or was
-    substituted from a cache instead of being built.
+    ``outputs`` maps each output name to its store path. ``built`` is
+    False when the outputs were already in the store or were substituted
+    from a cache instead of being built.
     """
 
     derivation: Derivation
     store_path: str
+    outputs: dict[str, str]
     built: bool
     seconds: float
 

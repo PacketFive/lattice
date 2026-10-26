@@ -14,6 +14,12 @@ Method              Role    Further rule
 ``evaluate_source`` user
 ``build``           user
 ``check``           user
+``plan``            user
+``path_info``       user
+``verify``          user
+``roots``           user
+``add_root``        user    A user may only add or remove roots named
+``remove_root``     user    ``per-user/<name>`` or below it; admins any.
 ``switch``          user    A user may only switch ``per-user/<name>``
                             and profiles below it; admins any profile.
 ``gc``              admin
@@ -43,8 +49,11 @@ from .protocol import (
     DerivationParams,
     EvaluateSourceParams,
     NoParams,
+    PathParams,
     PushParams,
     Request,
+    RootNameParams,
+    RootParams,
     RPCError,
     SwitchParams,
     error_object,
@@ -73,6 +82,12 @@ METHODS: dict[str, Method] = {
     ),
     "build": Method(DerivationParams, Role.USER, lambda api, p: api.build(p.derivation)),
     "check": Method(DerivationParams, Role.USER, lambda api, p: api.check(p.derivation)),
+    "plan": Method(DerivationParams, Role.USER, lambda api, p: api.plan(p.derivation)),
+    "path_info": Method(PathParams, Role.USER, lambda api, p: api.path_info(p.path)),
+    "verify": Method(PathParams, Role.USER, lambda api, p: api.verify(p.path)),
+    "roots": Method(NoParams, Role.USER, lambda api, p: api.roots()),
+    "add_root": Method(RootParams, Role.USER, lambda api, p: api.add_root(p.name, p.path)),
+    "remove_root": Method(RootNameParams, Role.USER, lambda api, p: api.remove_root(p.name)),
     "switch": Method(SwitchParams, Role.USER, lambda api, p: api.switch(p.profile, p.derivation)),
     "sandbox_config": Method(
         DerivationParams, Role.USER, lambda api, p: api.sandbox_config(p.derivation)
@@ -84,10 +99,11 @@ METHODS: dict[str, Method] = {
 
 
 def may_switch(identity: Identity, profile: str) -> bool:
-    """Return True if ``identity`` may change ``profile``.
+    """Return True if ``identity`` may change ``profile`` or the root of that name.
 
-    Admins may change any profile. A user may change ``per-user/<name>``
-    and profiles below it, where ``<name>`` is the user's own name.
+    Admins may change any profile or root. A user may change
+    ``per-user/<name>`` and names below it, where ``<name>`` is the user's
+    own name.
     """
     if identity.role is Role.ADMIN:
         return True
@@ -103,6 +119,8 @@ def authorize(identity: Identity, name: str, params: BaseModel) -> None:
         raise PermissionDenied(f"{name} needs the admin role")
     if isinstance(params, SwitchParams) and not may_switch(identity, params.profile):
         raise PermissionDenied(f"{identity.name} may not switch profile {params.profile!r}")
+    if isinstance(params, RootParams | RootNameParams) and not may_switch(identity, params.name):
+        raise PermissionDenied(f"{identity.name} may not change root {params.name!r}")
 
 
 def _invalid_params(error: ValidationError) -> RPCError:

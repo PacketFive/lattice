@@ -26,6 +26,7 @@ SANDBOX_BACKENDS: tuple[str, ...] = get_args(SandboxBackend)
 
 DEFAULT_SOCKET = "/run/lattice/daemon.sock"
 DEFAULT_SETTINGS_PATH = "/etc/lattice/settings.toml"
+DEFAULT_STORE_ROOT = "/lattice"
 
 
 def _settings_error(error: ValidationError) -> SettingsError:
@@ -124,6 +125,26 @@ class SandboxSettings(_SettingsModel):
     max_open_files: int = Field(default=1024, ge=64, le=1048576)
 
 
+class StoreSettings(_SettingsModel):
+    """Where the store is kept and how many builds run at once (sections 10 to 12).
+
+    ``root`` holds ``store``, ``staging`` and ``var``. Store paths keep
+    their names under ``/lattice/store`` wherever ``root`` is, so a store
+    under another root is for testing and for preparing a store that is
+    later moved into place. ``max_jobs`` is the number of builds that may
+    run in parallel.
+    """
+
+    root: str = DEFAULT_STORE_ROOT
+    max_jobs: int = Field(default=1, ge=1, le=256)
+
+    @model_validator(mode="after")
+    def _check_root(self) -> Self:
+        if not os.path.isabs(self.root) or os.path.normpath(self.root) != self.root:
+            raise ValueError(f"store root must be a normalised absolute path, not {self.root!r}")
+        return self
+
+
 class Settings(_SettingsModel):
     """What one machine uses to build and fetch store paths.
 
@@ -132,7 +153,8 @@ class Settings(_SettingsModel):
     ``trusted_keys`` the public keys their signatures must come from
     (section 14.3). ``require_provenance`` rejects substituted paths without
     valid signed provenance (section 14.9). ``daemon`` is read only by
-    ``lattice daemon``. ``sandbox`` holds the limits of every build.
+    ``lattice daemon``. ``sandbox`` holds the limits of every build and
+    ``store`` the location of the store.
     """
 
     sandbox_backend: SandboxBackend = "namespaces"
@@ -140,6 +162,7 @@ class Settings(_SettingsModel):
     trusted_keys: tuple[str, ...] = ()
     require_provenance: bool = False
     sandbox: SandboxSettings = SandboxSettings()
+    store: StoreSettings = StoreSettings()
     daemon: DaemonSettings = DaemonSettings()
 
     @classmethod
@@ -147,7 +170,8 @@ class Settings(_SettingsModel):
         """Read the settings of a machine from the TOML file at ``path``.
 
         Top-level keys are the fields of Settings, the ``[sandbox]`` table
-        holds SandboxSettings and the ``[daemon]`` table DaemonSettings.
+        holds SandboxSettings, the ``[store]`` table StoreSettings and the
+        ``[daemon]`` table DaemonSettings.
         Grants are arrays of tables, written ``[[daemon.clients]]`` and
         ``[[daemon.tokens]]``. A key the model
         does not know is an error. A file that cannot be read, is not valid

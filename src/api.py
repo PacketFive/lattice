@@ -26,14 +26,16 @@ Example::
 from __future__ import annotations
 
 import os
+import sqlite3
 import time
 from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
 import pybonsai
 from pybonsai import FrozenMap, Host, PyBonsaiError
 
 from .derivation import Derivation
-from .errors import EvaluationFailed
+from .errors import EvaluationFailed, StoreError
 from .events import EvaluationFinished, EvaluationStarted, EventHandler, emit
 from .models import BuildResult, Evaluation, GCResult, Generation
 from .sandbox import BackendStatus, OciConfig, make_spec, oci_config
@@ -41,13 +43,36 @@ from .sandbox import backend_status as probe_backends
 from .sandbox.libc import machine
 from .settings import Settings
 from .stdlib import build_host
+from .store import (
+    Builder,
+    BuildPlan,
+    GCRootInfo,
+    StoreLayout,
+    StorePathInfo,
+    VerifyResult,
+    check_store_path,
+    collect,
+    content_hash,
+    database,
+    lock,
+)
+from .store.builder import direct_inputs
+
+if TYPE_CHECKING:
+    from .sandbox import Backend
 
 
 class Lattice:
     """Entry point for using Lattice from Python.
 
     ``settings`` defaults to Settings(). ``on_event`` receives an Event for
-    each step of an operation (see events.py).
+    each step of an operation (see events.py). ``backend`` is the sandbox
+    backend for builds; None chooses the one the settings name when the
+    first build needs it.
+
+    The store under ``settings.store.root`` is created by the first
+    operation that writes to it. Operations that only read it raise
+    StoreError while it does not exist.
     """
 
     def __init__(
@@ -55,10 +80,13 @@ class Lattice:
         settings: Settings | None = None,
         *,
         on_event: EventHandler | None = None,
+        backend: Backend | None = None,
     ) -> None:
-        """Store the settings and event handler. Nothing is read or created."""
+        """Store the settings, event handler and backend. Nothing is read or created."""
         self.settings = settings if settings is not None else Settings()
         self.on_event = on_event
+        self.backend = backend
+        self.layout = StoreLayout(root=self.settings.store.root)
         self._host: Host | None = None
 
     def _get_host(self) -> Host:
@@ -104,41 +132,146 @@ class Lattice:
         )
         return result
 
-    def build(self, drv: Derivation) -> BuildResult:
-        """Realise ``drv`` and its inputs and register the outputs. Phases 2 and 3.
+    def _builder(self) -> Builder:
+        return Builder(self.layout, self.settings, backend=self.backend, on_event=self.on_event)
 
-        Paths already in the store are reused, and from Phase 5 paths in a
-        trusted cache are substituted. Raises BuildFailed,
-        BackendUnavailable or StoreError.
+    def build(self, drv: Derivation) -> BuildResult:
+        """Realise ``drv`` and its inputs and register the outputs. Phase 3.
+
+        Outputs already registered are reused, and from Phase 5 paths in
+        a trusted cache are substituted. The outputs are not made roots,
+        so the next collection removes them unless add_root keeps them.
+        Raises BuildFailed, BackendUnavailable or StoreError.
         """
-        raise NotImplementedError
+        return self._builder().build(drv)
 
     def check(self, drv: Derivation) -> BuildResult:
-        """Rebuild the registered output of ``drv`` and compare it (section 16). Phase 3.
+        """Rebuild the registered outputs of ``drv`` and compare them (section 16). Phase 3.
 
-        Raises BuildFailed if the new output differs from the stored one.
+        The rebuilt outputs are thrown away. Raises StoreError if ``drv`` is
+        not built and BuildFailed, naming the files that differ, if the
+        outputs are not the same.
         """
-        raise NotImplementedError
+        return self._builder().check(drv)
+
+    def plan(self, drv: Derivation) -> BuildPlan:
+        """List what building ``drv`` would download, build or reuse. Phase 3."""
+        return self._builder().plan(drv)
+
+    def _connect(self) -> sqlite3.Connection:
+        return database.connect(self.layout)
+
+    def path_info(self, path: str) -> StorePathInfo:
+        """Return what the store database records about ``path``. Phase 3.
+
+        Raises StoreError if ``path`` is not a registered store path.
+        """
+        check_store_path(path)
+        connection = self._connect()
+        try:
+            info = database.path_info(connection, path)
+        finally:
+            connection.close()
+        if info is None:
+            raise StoreError(f"{path} is not registered")
+        return info
+
+    def verify(self, path: str) -> VerifyResult:
+        """Hash the contents of ``path`` again and compare with the database (section 11).
+
+        Phase 3. Raises StoreError if ``path`` is not registered or its
+        files are missing.
+        """
+        self.path_info(path)
+        with lock.shared(self.layout):
+            info = self.path_info(path)
+            try:
+                digest, size = content_hash(self.layout.physical(path))
+            except FileNotFoundError:
+                raise StoreError(f"{path} is registered but its files are missing") from None
+        return VerifyResult(
+            path=path,
+            ok=digest == info.content_sha256 and size == info.size,
+            expected_sha256=info.content_sha256,
+            actual_sha256=digest,
+            expected_size=info.size,
+            actual_size=size,
+        )
 
     def sandbox_config(self, drv: Derivation) -> OciConfig:
         """Describe the sandbox that would build ``drv`` as an OCI runtime configuration.
 
         Uses the sandbox settings and this process's uid and gid; nothing
-        runs. Raises BuildFailed if ``drv`` cannot be built in the sandbox
-        and BackendUnavailable if the machine is not supported. Phase 2.
+        runs. When the inputs of ``drv`` are registered, the sandbox has
+        them and the paths they refer to, as a build would; otherwise it
+        has the outputs of every derivation ``drv`` depends on. Raises
+        BuildFailed if ``drv`` cannot be built in the sandbox and
+        BackendUnavailable if the machine is not supported. Phase 2.
         """
         spec = make_spec(
-            drv, self.settings.sandbox, uid=os.getuid(), gid=os.getgid(), machine=machine()
+            drv,
+            self.settings.sandbox,
+            uid=os.getuid(),
+            gid=os.getgid(),
+            machine=machine(),
+            inputs=self._registered_inputs(drv),
         )
         return oci_config(spec)
+
+    def _registered_inputs(self, drv: Derivation) -> tuple[str, ...] | None:
+        if not self.layout.exists():
+            return None
+        direct = direct_inputs(drv)
+        connection = self._connect()
+        try:
+            found = database.closure(connection, direct)
+        finally:
+            connection.close()
+        return tuple(sorted(found)) if set(direct) <= found else None
 
     def backend_status(self) -> tuple[BackendStatus, ...]:
         """Report which sandbox backends can run on this machine (section 9.7). Phase 2."""
         return probe_backends()
 
     def gc(self) -> GCResult:
-        """Remove every store path not reachable from a root (section 12). Phase 3."""
-        raise NotImplementedError
+        """Remove every store path no root or running process keeps (section 12). Phase 3."""
+        return collect(self.layout, self.on_event)
+
+    def add_root(self, name: str, path: str) -> GCRootInfo:
+        """Keep ``path`` and everything it refers to under the root ``name``. Phase 3.
+
+        A root of the same name is replaced. Raises StoreError if the name
+        is not valid or ``path`` is not registered.
+        """
+        check_store_path(path)
+        connection = database.connect(self.layout, create=True)
+        try:
+            # Shared, so that a collection that has already marked path dead cannot be running.
+            with lock.shared(self.layout):
+                return database.add_root(connection, name, path)
+        finally:
+            connection.close()
+
+    def remove_root(self, name: str) -> GCRootInfo:
+        """Remove the root ``name`` and return it. Phase 3.
+
+        Raises StoreError if there is no such root.
+        """
+        connection = self._connect()
+        try:
+            return database.remove_root(connection, name)
+        finally:
+            connection.close()
+
+    def roots(self) -> tuple[GCRootInfo, ...]:
+        """Return every root, sorted by name. Phase 3."""
+        if not self.layout.exists():
+            return ()
+        connection = self._connect()
+        try:
+            return database.roots(connection)
+        finally:
+            connection.close()
 
     def switch(self, profile: str, drv: Derivation) -> Generation:
         """Build ``drv`` and make it the current generation of ``profile``. Phase 4."""

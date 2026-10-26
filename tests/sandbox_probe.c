@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/xattr.h>
+#include <time.h>
 #include <unistd.h>
 
 extern char **environ;
@@ -103,6 +104,23 @@ int main(int argc, char **argv)
 	} else if (!strcmp(mode, "open")) {
 		make_out();
 		check("open", open(argv[2], O_RDONLY));
+	} else if (!strcmp(mode, "refer")) {
+		FILE *file;
+
+		make_out();
+		file = fopen(in_out("refs"), "w");
+		for (int i = 2; i < argc; i++)
+			fprintf(file, "%s\n", argv[i]);
+		fclose(file);
+	} else if (!strcmp(mode, "clock")) {
+		struct timespec now;
+		FILE *file;
+
+		make_out();
+		clock_gettime(CLOCK_REALTIME, &now);
+		file = fopen(in_out("clock"), "w");
+		fprintf(file, "%ld.%09ld\n", (long)now.tv_sec, now.tv_nsec);
+		fclose(file);
 	} else if (!strcmp(mode, "sleep")) {
 		puts("sleeping");
 		sleep(30);

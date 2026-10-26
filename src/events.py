@@ -8,8 +8,8 @@ that only configures logging sees the same steps.
 
 Events are immutable Pydantic models. The ``type`` field names the event,
 so the daemon can send events to a client as JSON and the client can
-rebuild the same objects. Later phases add events for builds, collection,
-switching and substitution.
+rebuild the same objects. Later phases add events for switching and
+substitution.
 """
 
 from __future__ import annotations
@@ -45,8 +45,50 @@ class EvaluationFinished(Event):
     seconds: float
 
 
-AnyEvent = Annotated[EvaluationStarted | EvaluationFinished, Field(discriminator="type")]
-EVENTS: TypeAdapter[EvaluationStarted | EvaluationFinished] = TypeAdapter(AnyEvent)
+class BuildStarted(Event):
+    """Lattice has started to download or build the derivation ``name``."""
+
+    type: Literal["build_started"] = "build_started"
+    name: str
+    store_path: str
+
+
+class BuildLog(Event):
+    """The build of ``name`` printed ``text``, which may end part way through a line."""
+
+    type: Literal["build_log"] = "build_log"
+    name: str
+    text: str
+
+
+class BuildFinished(Event):
+    """The derivation ``name`` is in the store; ``built`` is False if it already was."""
+
+    type: Literal["build_finished"] = "build_finished"
+    name: str
+    store_path: str
+    built: bool
+    seconds: float
+
+
+class CollectionFinished(Event):
+    """Garbage collection removed ``removed`` store paths and freed ``freed_bytes``."""
+
+    type: Literal["collection_finished"] = "collection_finished"
+    removed: int
+    freed_bytes: int
+
+
+EventUnion = (
+    EvaluationStarted
+    | EvaluationFinished
+    | BuildStarted
+    | BuildLog
+    | BuildFinished
+    | CollectionFinished
+)
+AnyEvent = Annotated[EventUnion, Field(discriminator="type")]
+EVENTS: TypeAdapter[EventUnion] = TypeAdapter(AnyEvent)
 """Validates any event from its JSON form, choosing the class by ``type``."""
 
 EventHandler = Callable[[Event], None]

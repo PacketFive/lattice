@@ -111,9 +111,20 @@ def input_closure(drv: Derivation) -> tuple[Derivation, ...]:
 
 
 def make_spec(
-    drv: Derivation, settings: SandboxSettings, *, uid: int, gid: int, machine: str
+    drv: Derivation,
+    settings: SandboxSettings,
+    *,
+    uid: int,
+    gid: int,
+    machine: str,
+    inputs: tuple[str, ...] | None = None,
 ) -> SandboxSpec:
     """Describe the sandbox that builds ``drv``.
+
+    ``inputs`` are the store paths mounted in the sandbox. The store
+    passes the outputs of the derivations ``drv`` depends on with
+    everything they refer to (section 10.1); None mounts the outputs of
+    every derivation reachable through ``env`` instead.
 
     Raises BuildFailed if the builder is built into Lattice, is not a
     normalised absolute path inside an input, or the environment breaks
@@ -125,7 +136,8 @@ def make_spec(
     if drv.builder.startswith("builtin:"):
         raise BuildFailed(f"{drv.name}: {drv.builder} runs in Lattice, not in the sandbox")
     env = build_environment(drv)
-    inputs = tuple(path for dep in input_closure(drv) for path in dep.output_paths.values())
+    if inputs is None:
+        inputs = tuple(path for dep in input_closure(drv) for path in dep.output_paths.values())
     builder = drv.builder
     inside = any(builder == path or builder.startswith(path + "/") for path in inputs)
     if posixpath.normpath(builder) != builder or not inside:

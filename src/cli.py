@@ -4,17 +4,35 @@
 The subcommands are::
 
     lattice [--daemon | --remote URL] eval FILE.pyb
+    lattice [--daemon | --remote URL] build [--check] FILE.pyb [NAME]
+    lattice [--daemon | --remote URL] check FILE.pyb [NAME]
+    lattice [--daemon | --remote URL] plan FILE.pyb [NAME]
     lattice [--daemon | --remote URL] sandbox-config FILE.pyb [NAME]
+    lattice [--daemon | --remote URL] path-info PATH
+    lattice [--daemon | --remote URL] verify PATH
+    lattice [--daemon | --remote URL] roots
+    lattice [--daemon | --remote URL] add-root NAME PATH
+    lattice [--daemon | --remote URL] remove-root NAME
+    lattice [--daemon | --remote URL] gc
     lattice [--daemon | --remote URL] backend-status
     lattice daemon
 
 ``eval`` evaluates the file and prints every top-level derivation with its
-store path and canonical JSON. Nothing is built. ``sandbox-config`` prints
-the OCI runtime configuration of the sandbox that would build derivation
-NAME of the file, which may be left out when the file defines only one.
+store path and canonical JSON. Nothing is built. The commands that take
+FILE.pyb [NAME] act on derivation NAME of the file; NAME may be left out
+when the file defines only one. ``build`` builds it and prints its output
+paths, and ``build --check`` and ``check`` build it again and compare
+(RFC 0001 section 16). ``plan`` prints what a build would reuse, download
+or build, and ``sandbox-config`` the OCI runtime configuration of the
+sandbox that would build it. ``path-info`` prints what the store database
+records about PATH, and ``verify`` hashes PATH again and exits with 1 if
+it changed. ``roots``, ``add-root`` and ``remove-root`` list and change
+the roots collection keeps, and ``gc`` collects garbage.
 ``backend-status`` prints whether each sandbox backend can run. ``daemon``
 runs the daemon of RFC 0001 section 6.2 until interrupted. Later phases
-add ``build``, ``gc``, ``switch``, ``push`` and ``materialise``.
+add ``switch``, ``push`` and ``materialise``.
+
+Build progress and logs go to stderr.
 
 Every subcommand calls one method of a LatticeAPI and only formats its
 result, so the command and the library always behave the same way. The
@@ -36,8 +54,9 @@ from collections.abc import Sequence
 
 from .api import Lattice
 from .client import DEFAULT_URL, Client, LatticeAPI
-from .derivation import canonical_json
+from .derivation import Derivation, canonical_json
 from .errors import LatticeError
+from .events import BuildLog, BuildStarted, Event
 from .settings import DEFAULT_SETTINGS_PATH, Settings
 from .transport import Daemon
 
@@ -67,9 +86,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     Global options are ``--settings FILE``, ``--daemon``, ``--remote URL``,
     ``--ca FILE``, ``--cert FILE`` and ``--key FILE``; ``--daemon`` and
-    ``--remote`` are mutually exclusive. ``eval`` takes a positional
-    ``file`` argument, ``sandbox-config`` a ``file`` and an optional
-    ``name``, and ``backend-status`` and ``daemon`` take no arguments.
+    ``--remote`` are mutually exclusive. The arguments of each
+    subcommand are those in the module docstring.
     """
     parser = argparse.ArgumentParser(prog="lattice", description="The PyrixOS package manager.")
     parser.add_argument("--settings", metavar="FILE", help="settings file to read")
@@ -83,17 +101,57 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate = commands.add_parser("eval", help="evaluate a file and print its derivations")
     evaluate.add_argument("file", help="PyBonsai file to evaluate")
     evaluate.set_defaults(handler=cmd_eval)
+    build = commands.add_parser("build", help="build a derivation and print its outputs")
+    _derivation_arguments(build)
+    build.add_argument("--check", action="store_true", help="rebuild and compare instead")
+    build.set_defaults(handler=cmd_build)
+    check = commands.add_parser("check", help="rebuild a derivation and compare the outputs")
+    _derivation_arguments(check)
+    check.set_defaults(handler=cmd_check)
+    plan = commands.add_parser("plan", help="show what building a derivation would do")
+    _derivation_arguments(plan)
+    plan.set_defaults(handler=cmd_plan)
     config = commands.add_parser(
         "sandbox-config", help="print the OCI configuration of a derivation's sandbox"
     )
-    config.add_argument("file", help="PyBonsai file to evaluate")
-    config.add_argument("name", nargs="?", help="derivation to describe")
+    _derivation_arguments(config)
     config.set_defaults(handler=cmd_sandbox_config)
+    info = commands.add_parser("path-info", help="show what the store records about a path")
+    info.add_argument("path", help="store path")
+    info.set_defaults(handler=cmd_path_info)
+    verify = commands.add_parser("verify", help="check a store path against its hash")
+    verify.add_argument("path", help="store path")
+    verify.set_defaults(handler=cmd_verify)
+    roots = commands.add_parser("roots", help="list the roots collection keeps")
+    roots.set_defaults(handler=cmd_roots)
+    add_root = commands.add_parser("add-root", help="keep a store path under a root")
+    add_root.add_argument("name", help="root name, for example per-user/alice/hello")
+    add_root.add_argument("path", help="store path")
+    add_root.set_defaults(handler=cmd_add_root)
+    remove_root = commands.add_parser("remove-root", help="remove a root")
+    remove_root.add_argument("name", help="root name")
+    remove_root.set_defaults(handler=cmd_remove_root)
+    gc = commands.add_parser("gc", help="remove store paths that nothing keeps")
+    gc.set_defaults(handler=cmd_gc)
     status = commands.add_parser("backend-status", help="show which sandbox backends can run")
     status.set_defaults(handler=cmd_backend_status)
     daemon = commands.add_parser("daemon", help="run the daemon")
     daemon.set_defaults(handler=cmd_daemon)
     return parser
+
+
+def _derivation_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("file", help="PyBonsai file to evaluate")
+    parser.add_argument("name", nargs="?", help="derivation of the file")
+
+
+def progress(event: Event) -> None:
+    """Print build starts and build logs to stderr."""
+    if isinstance(event, BuildStarted):
+        print(f"building {event.name} ({event.store_path})", file=sys.stderr, flush=True)
+    elif isinstance(event, BuildLog):
+        sys.stderr.write(event.text)
+        sys.stderr.flush()
 
 
 def make_api(args: argparse.Namespace) -> LatticeAPI:
@@ -108,7 +166,7 @@ def make_api(args: argparse.Namespace) -> LatticeAPI:
     if (args.daemon or args.remote is not None) and args.settings is not None:
         raise UsageError("--settings is not used with --daemon or --remote")
     if args.daemon:
-        return Client()
+        return Client(on_event=progress)
     if args.remote is not None:
         return Client(
             args.remote,
@@ -116,8 +174,9 @@ def make_api(args: argparse.Namespace) -> LatticeAPI:
             cert_file=args.cert,
             key_file=args.key,
             token=os.environ.get(TOKEN_VARIABLE) or None,
+            on_event=progress,
         )
-    return Lattice(load_settings(args.settings))
+    return Lattice(load_settings(args.settings), on_event=progress)
 
 
 def cmd_eval(args: argparse.Namespace) -> int:
@@ -133,24 +192,105 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_sandbox_config(args: argparse.Namespace) -> int:
-    """Print the OCI configuration of derivation ``args.name`` of ``args.file``.
+def select(api: LatticeAPI, file: str, name: str | None) -> Derivation:
+    """Evaluate ``file`` and return its derivation ``name``.
 
-    The name may be left out when the file defines one derivation. Return
-    0 on success. An unknown or missing name is a LatticeError.
+    The name may be None when the file defines one derivation. An unknown
+    or missing name is a LatticeError.
     """
-    api = make_api(args)
-    derivations = api.evaluate(args.file).derivations
-    if args.name is None:
+    derivations = api.evaluate(file).derivations
+    if name is None:
         if len(derivations) != 1:
             names = ", ".join(derivations) or "none"
-            raise LatticeError(f"{args.file} defines several derivations ({names}); name one")
-        drv = next(iter(derivations.values()))
-    elif args.name in derivations:
-        drv = derivations[args.name]
-    else:
-        raise LatticeError(f"{args.file} defines no derivation named {args.name!r}")
-    print(api.sandbox_config(drv).model_dump_json(indent=2))
+            raise LatticeError(f"{file} defines several derivations ({names}); name one")
+        return next(iter(derivations.values()))
+    if name in derivations:
+        return derivations[name]
+    raise LatticeError(f"{file} defines no derivation named {name!r}")
+
+
+def cmd_build(args: argparse.Namespace) -> int:
+    """Build derivation ``args.name`` of ``args.file`` and print each output path.
+
+    With ``--check`` run cmd_check instead. Return 0 on success.
+    """
+    if args.check:
+        return cmd_check(args)
+    api = make_api(args)
+    result = api.build(select(api, args.file, args.name))
+    for path in result.outputs.values():
+        print(path)
+    return 0
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    """Rebuild derivation ``args.name`` of ``args.file`` and compare. Return 0 if the same."""
+    api = make_api(args)
+    result = api.check(select(api, args.file, args.name))
+    print(f"{result.store_path}: rebuilt with the same contents")
+    return 0
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    """Print one line per step of the build: what happens to it and its store path."""
+    api = make_api(args)
+    for step in api.plan(select(api, args.file, args.name)).steps:
+        print(f"{step.action:<8} {step.outputs[next(iter(step.outputs))]}")
+    return 0
+
+
+def cmd_sandbox_config(args: argparse.Namespace) -> int:
+    """Print the OCI configuration of derivation ``args.name`` of ``args.file``. Return 0."""
+    api = make_api(args)
+    print(api.sandbox_config(select(api, args.file, args.name)).model_dump_json(indent=2))
+    return 0
+
+
+def cmd_path_info(args: argparse.Namespace) -> int:
+    """Print what the store records about ``args.path`` as JSON. Return 0."""
+    print(make_api(args).path_info(args.path).model_dump_json(indent=2))
+    return 0
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    """Hash ``args.path`` again. Return 0 if it matches the database and 1 if not."""
+    result = make_api(args).verify(args.path)
+    if result.ok:
+        print(f"{result.path}: ok")
+        return 0
+    print(
+        f"{result.path}: changed: SHA-256 {result.actual_sha256}, {result.actual_size} bytes;"
+        f" expected {result.expected_sha256}, {result.expected_size} bytes"
+    )
+    return 1
+
+
+def cmd_roots(args: argparse.Namespace) -> int:
+    """Print each root as ``<name> <store path>``. Return 0."""
+    for root in make_api(args).roots():
+        print(root.name, root.path)
+    return 0
+
+
+def cmd_add_root(args: argparse.Namespace) -> int:
+    """Make ``args.path`` the root ``args.name``. Return 0."""
+    root = make_api(args).add_root(args.name, args.path)
+    print(root.name, root.path)
+    return 0
+
+
+def cmd_remove_root(args: argparse.Namespace) -> int:
+    """Remove the root ``args.name``. Return 0."""
+    make_api(args).remove_root(args.name)
+    return 0
+
+
+def cmd_gc(args: argparse.Namespace) -> int:
+    """Collect garbage, print each removed path and the bytes freed. Return 0."""
+    result = make_api(args).gc()
+    for path in result.removed:
+        print(path)
+    print(f"removed {len(result.removed)} store paths, freed {result.freed_bytes} bytes")
     return 0
 
 

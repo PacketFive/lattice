@@ -42,7 +42,16 @@ from .errors import (
     StoreError,
     SubstitutionFailed,
 )
-from .events import EvaluationFinished, EvaluationStarted, Event, EventHandler
+from .events import (
+    BuildFinished,
+    BuildLog,
+    BuildStarted,
+    CollectionFinished,
+    EvaluationFinished,
+    EvaluationStarted,
+    Event,
+    EventHandler,
+)
 from .models import BuildResult, Evaluation, GCResult, Generation, Identity, Role
 from .sandbox import BackendStatus, OciConfig
 from .settings import (
@@ -53,13 +62,25 @@ from .settings import (
     SandboxBackend,
     SandboxSettings,
     Settings,
+    StoreSettings,
     TokenGrant,
 )
+from .store import BuildPlan, GCRootInfo, PlannedStep, StorePathInfo, VerifyResult
 from .transport import Daemon
 
 __version__ = "0.0.0"
 
 __all__ = [
+    "VerifyResult",
+    "StoreSettings",
+    "StorePathInfo",
+    "PlannedStep",
+    "GCRootInfo",
+    "CollectionFinished",
+    "BuildStarted",
+    "BuildPlan",
+    "BuildLog",
+    "BuildFinished",
     "DEFAULT_SOCKET",
     "DEFAULT_URL",
     "SANDBOX_BACKENDS",

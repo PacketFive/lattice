@@ -122,9 +122,28 @@ class EvaluateSourceParams(Model):
 
 
 class DerivationParams(Model):
-    """Parameters of ``build`` and ``check``."""
+    """Parameters of ``build``, ``check``, ``plan`` and ``sandbox_config``."""
 
     derivation: Derivation
+
+
+class PathParams(Model):
+    """Parameters of ``path_info`` and ``verify``."""
+
+    path: str
+
+
+class RootParams(Model):
+    """Parameters of ``add_root``."""
+
+    name: str
+    path: str
+
+
+class RootNameParams(Model):
+    """Parameters of ``remove_root``."""
+
+    name: str
 
 
 class SwitchParams(Model):

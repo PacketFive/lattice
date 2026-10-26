@@ -39,13 +39,16 @@ class BuildRequest(Model):
 
     ``work_dir`` is an empty directory that holds the sandbox root, the
     copied outputs and ``build.log``. ``host_store`` is the host directory
-    that holds the derivation's inputs.
+    that holds the derivation's inputs. ``inputs`` lists the store paths
+    the build sees; None means the outputs of every derivation it depends
+    on (see make_spec).
     """
 
     derivation: Derivation
     work_dir: str
     host_store: str = STORE_DIR
     sandbox: SandboxSettings = SandboxSettings()
+    inputs: tuple[str, ...] | None = None
 
 
 class BuildOutcome(Model):
@@ -142,7 +145,14 @@ def run_build(
 
         backend = NamespaceBackend()
     drv = request.derivation
-    spec = make_spec(drv, request.sandbox, uid=os.getuid(), gid=os.getgid(), machine=libc.machine())
+    spec = make_spec(
+        drv,
+        request.sandbox,
+        uid=os.getuid(),
+        gid=os.getgid(),
+        machine=libc.machine(),
+        inputs=request.inputs,
+    )
     work = Path(request.work_dir)
     root, out_dir, log = work / "root", work / "out", work / "build.log"
     root.mkdir(mode=0o700)
