@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
+from pybonsai import FrozenMap
 
 from lattice import (
     AuthenticationFailed,
@@ -19,6 +20,7 @@ from lattice import (
     ClientGrant,
     Daemon,
     DaemonSettings,
+    Derivation,
     EvaluationFailed,
     Event,
     EventHandler,
@@ -87,6 +89,18 @@ def test_internal_errors_are_hidden(unix_daemon: Daemon) -> None:
 
 def test_push_without_result(unix_daemon: Daemon) -> None:
     assert local(unix_daemon).push(["/lattice/store/a-x"], "https://cache") is None
+
+
+def test_sandbox_methods(unix_daemon: Daemon) -> None:
+    tools = Derivation(name="tools", builder="/bin/sh")
+    drv = Derivation(
+        name="hello", builder=f"{tools.store_path}/bin/sh", env=FrozenMap({"tools": tools})
+    )
+    config = local(unix_daemon).sandbox_config(drv)
+    assert config.process.args == (drv.builder,)
+    assert config.linux.uid_mappings[0].host_id == 1000
+    statuses = local(unix_daemon).backend_status()
+    assert [(s.name, s.available) for s in statuses] == [("namespaces", True), ("oci", False)]
 
 
 def test_info(unix_daemon: Daemon) -> None:

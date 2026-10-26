@@ -33,7 +33,7 @@ version = { attr = "lattice.__version__" }
 
 # The repository's src directory is the lattice package itself.
 [tool.setuptools]
-packages = ["lattice"]
+packages = ["lattice", "lattice.sandbox"]
 package-dir = { lattice = "src" }
 
 # PEP 561 marker: the package ships its own type hints.
@@ -78,3 +78,6 @@ reportMissingTypeStubs = "none"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov-report=term-missing --import-mode=importlib"
+markers = [
+  "requires_userns: needs unprivileged user namespaces and a C compiler that links statically",
+]

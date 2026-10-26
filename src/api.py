@@ -36,6 +36,9 @@ from .derivation import Derivation
 from .errors import EvaluationFailed
 from .events import EvaluationFinished, EvaluationStarted, EventHandler, emit
 from .models import BuildResult, Evaluation, GCResult, Generation
+from .sandbox import BackendStatus, OciConfig, make_spec, oci_config
+from .sandbox import backend_status as probe_backends
+from .sandbox.libc import machine
 from .settings import Settings
 from .stdlib import build_host
 
@@ -116,6 +119,22 @@ class Lattice:
         Raises BuildFailed if the new output differs from the stored one.
         """
         raise NotImplementedError
+
+    def sandbox_config(self, drv: Derivation) -> OciConfig:
+        """Describe the sandbox that would build ``drv`` as an OCI runtime configuration.
+
+        Uses the sandbox settings and this process's uid and gid; nothing
+        runs. Raises BuildFailed if ``drv`` cannot be built in the sandbox
+        and BackendUnavailable if the machine is not supported. Phase 2.
+        """
+        spec = make_spec(
+            drv, self.settings.sandbox, uid=os.getuid(), gid=os.getgid(), machine=machine()
+        )
+        return oci_config(spec)
+
+    def backend_status(self) -> tuple[BackendStatus, ...]:
+        """Report which sandbox backends can run on this machine (section 9.7). Phase 2."""
+        return probe_backends()
 
     def gc(self) -> GCResult:
         """Remove every store path not reachable from a root (section 12). Phase 3."""

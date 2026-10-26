@@ -19,9 +19,10 @@ Names in ``__all__`` follow semantic versioning from release 1.0. A name
 is removed only after one minor release in which using it raises a
 DeprecationWarning. Modules and names not listed here are internal.
 
-Phase 1 provides derivations, the standard library and evaluation. Later
-phases add the build sandbox, the store, the dependency database, the
-garbage collector, profiles and binary caches as modules of this package.
+Phase 1 provides derivations, the standard library and evaluation, and
+Phase 2 the build sandbox (the ``lattice.sandbox`` package). Later phases
+add the store, the dependency database, the garbage collector, profiles
+and binary caches as modules of this package.
 """
 
 from __future__ import annotations
@@ -43,12 +44,14 @@ from .errors import (
 )
 from .events import EvaluationFinished, EvaluationStarted, Event, EventHandler
 from .models import BuildResult, Evaluation, GCResult, Generation, Identity, Role
+from .sandbox import BackendStatus, OciConfig
 from .settings import (
     DEFAULT_SOCKET,
     SANDBOX_BACKENDS,
     ClientGrant,
     DaemonSettings,
     SandboxBackend,
+    SandboxSettings,
     Settings,
     TokenGrant,
 )
@@ -61,6 +64,7 @@ __all__ = [
     "DEFAULT_URL",
     "SANDBOX_BACKENDS",
     "AuthenticationFailed",
+    "BackendStatus",
     "BackendUnavailable",
     "BuildFailed",
     "BuildResult",
@@ -81,10 +85,12 @@ __all__ = [
     "Lattice",
     "LatticeAPI",
     "LatticeError",
+    "OciConfig",
     "PermissionDenied",
     "ProtocolError",
     "Role",
     "SandboxBackend",
+    "SandboxSettings",
     "Settings",
     "SettingsError",
     "StoreError",

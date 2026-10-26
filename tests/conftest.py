@@ -23,7 +23,9 @@ from lattice import (
     GCResult,
     Generation,
     LatticeAPI,
+    SandboxSettings,
 )
+from lattice.sandbox import BackendStatus, OciConfig, make_spec, oci_config
 
 
 class FakeAPI:
@@ -47,6 +49,16 @@ class FakeAPI:
 
     def check(self, drv: Derivation) -> BuildResult:
         raise NotImplementedError
+
+    def sandbox_config(self, drv: Derivation) -> OciConfig:
+        spec = make_spec(drv, SandboxSettings(), uid=1000, gid=1000, machine="x86_64")
+        return oci_config(spec)
+
+    def backend_status(self) -> tuple[BackendStatus, ...]:
+        return (
+            BackendStatus(name="namespaces", available=True),
+            BackendStatus(name="oci", available=False, reason="not available in this release"),
+        )
 
     def gc(self) -> GCResult:
         return GCResult(removed=("/lattice/store/a-x",), freed_bytes=3, seconds=0.5)

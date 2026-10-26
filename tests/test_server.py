@@ -160,3 +160,11 @@ def test_rpc_invalid_derivation(factory: Factory) -> None:
     request = {"jsonrpc": "2.0", "method": "check", "params": {"derivation": {}}, "id": 1}
     reply = rpc(Dispatcher(factory), request)
     assert reply["error"]["code"] == INVALID_PARAMS
+
+
+def test_rpc_returns_a_list_for_a_tuple(factory: Factory) -> None:
+    reply = rpc(Dispatcher(factory), {"jsonrpc": "2.0", "method": "backend_status", "id": 1}, ALICE)
+    assert reply["result"] == [
+        {"name": "namespaces", "available": True, "reason": ""},
+        {"name": "oci", "available": False, "reason": "not available in this release"},
+    ]

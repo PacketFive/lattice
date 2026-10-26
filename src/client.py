@@ -32,7 +32,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from .derivation import Derivation
 from .errors import ProtocolError, SettingsError
@@ -53,9 +53,13 @@ from .protocol import (
     SwitchParams,
     raise_error,
 )
+from .sandbox import BackendStatus, OciConfig
 from .settings import DEFAULT_SOCKET
 
 DEFAULT_URL = f"unix://{DEFAULT_SOCKET}"
+
+
+_BACKEND_STATUSES = TypeAdapter(tuple[BackendStatus, ...])
 
 
 @runtime_checkable
@@ -76,6 +80,14 @@ class LatticeAPI(Protocol):
 
     def check(self, drv: Derivation) -> BuildResult:
         """Rebuild the registered output of ``drv`` and compare it."""
+        ...
+
+    def sandbox_config(self, drv: Derivation) -> OciConfig:
+        """Describe the sandbox that would build ``drv`` as an OCI runtime configuration."""
+        ...
+
+    def backend_status(self) -> tuple[BackendStatus, ...]:
+        """Report which sandbox backends can run on the machine that builds."""
         ...
 
     def gc(self) -> GCResult:
@@ -266,6 +278,19 @@ class Client:
         """Have the daemon rebuild ``drv`` and compare the outputs."""
         params = DerivationParams(derivation=drv)
         return self._result(BuildResult, self._call("check", params))
+
+    def sandbox_config(self, drv: Derivation) -> OciConfig:
+        """Have the daemon describe the sandbox that would build ``drv``."""
+        params = DerivationParams(derivation=drv)
+        return self._result(OciConfig, self._call("sandbox_config", params))
+
+    def backend_status(self) -> tuple[BackendStatus, ...]:
+        """Have the daemon report which sandbox backends can run on its machine."""
+        value = self._call("backend_status", NoParams())
+        try:
+            return _BACKEND_STATUSES.validate_json(json.dumps(value))
+        except ValidationError as error:
+            raise ProtocolError(f"invalid backend status from the daemon: {error}") from error
 
     def gc(self) -> GCResult:
         """Have the daemon collect garbage. Needs the admin role."""

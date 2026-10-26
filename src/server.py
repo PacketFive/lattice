@@ -64,7 +64,7 @@ class Method:
 
     params: type[Model]
     role: Role
-    call: Callable[[LatticeAPI, Any], BaseModel | None]
+    call: Callable[[LatticeAPI, Any], BaseModel | tuple[BaseModel, ...] | None]
 
 
 METHODS: dict[str, Method] = {
@@ -74,6 +74,10 @@ METHODS: dict[str, Method] = {
     "build": Method(DerivationParams, Role.USER, lambda api, p: api.build(p.derivation)),
     "check": Method(DerivationParams, Role.USER, lambda api, p: api.check(p.derivation)),
     "switch": Method(SwitchParams, Role.USER, lambda api, p: api.switch(p.profile, p.derivation)),
+    "sandbox_config": Method(
+        DerivationParams, Role.USER, lambda api, p: api.sandbox_config(p.derivation)
+    ),
+    "backend_status": Method(NoParams, Role.USER, lambda api, p: api.backend_status()),
     "gc": Method(NoParams, Role.ADMIN, lambda api, p: api.gc()),
     "push": Method(PushParams, Role.ADMIN, lambda api, p: api.push(p.paths, p.cache)),
 }
@@ -147,7 +151,11 @@ class Dispatcher:
         authorize(identity, name, model)
         logger.info("%s (%s) calls %s", identity.name, identity.transport, name)
         result = method.call(self.factory(on_event), model)
-        return None if result is None else result.model_dump(mode="json")
+        if result is None:
+            return None
+        if isinstance(result, tuple):
+            return [item.model_dump(mode="json") for item in result]
+        return result.model_dump(mode="json")
 
     def handle_rpc_value(
         self, value: object, identity: Identity, on_event: EventHandler | None = None

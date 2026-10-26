@@ -109,6 +109,21 @@ class DaemonSettings(_SettingsModel):
         return self
 
 
+class SandboxSettings(_SettingsModel):
+    """Limits the build sandbox applies to every build (section 9.4).
+
+    ``timeout`` ends a build that runs longer than that many seconds, and
+    ``max_silent_time`` one that writes no log output for that many
+    seconds. None means no limit. ``max_open_files`` is the builder's
+    ``RLIMIT_NOFILE``. None of these is part of a derivation, so changing
+    them changes no hash.
+    """
+
+    timeout: int | None = Field(default=None, gt=0)
+    max_silent_time: int | None = Field(default=None, gt=0)
+    max_open_files: int = Field(default=1024, ge=64, le=1048576)
+
+
 class Settings(_SettingsModel):
     """What one machine uses to build and fetch store paths.
 
@@ -117,22 +132,24 @@ class Settings(_SettingsModel):
     ``trusted_keys`` the public keys their signatures must come from
     (section 14.3). ``require_provenance`` rejects substituted paths without
     valid signed provenance (section 14.9). ``daemon`` is read only by
-    ``lattice daemon``.
+    ``lattice daemon``. ``sandbox`` holds the limits of every build.
     """
 
     sandbox_backend: SandboxBackend = "namespaces"
     substituters: tuple[str, ...] = ()
     trusted_keys: tuple[str, ...] = ()
     require_provenance: bool = False
+    sandbox: SandboxSettings = SandboxSettings()
     daemon: DaemonSettings = DaemonSettings()
 
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> Settings:
         """Read the settings of a machine from the TOML file at ``path``.
 
-        Top-level keys are the fields of Settings and the ``[daemon]``
-        table holds DaemonSettings. Grants are arrays of tables, written
-        ``[[daemon.clients]]`` and ``[[daemon.tokens]]``. A key the model
+        Top-level keys are the fields of Settings, the ``[sandbox]`` table
+        holds SandboxSettings and the ``[daemon]`` table DaemonSettings.
+        Grants are arrays of tables, written ``[[daemon.clients]]`` and
+        ``[[daemon.tokens]]``. A key the model
         does not know is an error. A file that cannot be read, is not valid
         TOML or holds an invalid value raises SettingsError.
         """

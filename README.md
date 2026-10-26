@@ -18,9 +18,17 @@ Phase 1: derivations, the standard library, the `Lattice` library
 interface, the settings file, the daemon with its JSON-RPC and REST
 interface, `Client` and the `lattice eval` and `lattice daemon` commands.
 All of these work and are tested, the daemon over a Unix socket and TLS.
-`stack` and `profile` are declared and belong to Phase 4. The sandbox, store,
-dependency database, garbage collector, profiles and binary caches follow
-in later phases (see the development plan in the PyrixOS repository).
+`stack` and `profile` are declared and belong to Phase 4.
+
+Phase 2: the build sandbox. Each build runs in fresh Linux user, mount,
+network, PID, UTS and IPC namespaces, with no capabilities, no new
+privileges, a seccomp filter and a fixed environment, and sees only its
+declared inputs, read-only. `lattice sandbox-config` prints the sandbox of
+a derivation as an OCI runtime configuration, and `lattice backend-status`
+reports which backends this machine can run. The OCI and microVM backends,
+the store, dependency database, garbage collector, profiles and binary
+caches follow in later phases (see the development plan in the PyrixOS
+repository).
 
 ## Install
 
@@ -53,7 +61,9 @@ lattice --remote https://builder.example:7420 --ca ca.pem eval hello.pyb
 ```
 
 `eval` prints one line per derivation: its store path and its canonical
-JSON. It exits with 1 and a message on standard error if the file is
+JSON. `lattice sandbox-config FILE [NAME]` prints the OCI configuration of
+one derivation's sandbox, and `lattice backend-status` reports each
+sandbox backend and, if one cannot run, why. It exits with 1 and a message on standard error if the file is
 rejected or fails. `--remote` reads a bearer token from the `LATTICE_TOKEN`
 environment variable, never from the command line.
 
@@ -64,6 +74,11 @@ the file given with `--settings`. Without a file the defaults apply.
 sandbox_backend = "namespaces"
 substituters = ["https://cache.example.org"]
 trusted_keys = ["cache.example.org-1:..."]
+
+[sandbox]
+timeout = 3600
+max_silent_time = 600
+max_open_files = 1024
 
 [daemon]
 listen = "0.0.0.0:7420"
@@ -161,6 +176,7 @@ until their phase is complete.
 | `transport.py` | `Daemon`: the HTTP server on the Unix socket and TLS, and caller identification |
 | `client.py` | `Client` and the `LatticeAPI` protocol |
 | `cli.py` | The `lattice` command, a wrapper around `Lattice` and `Client` |
+| `sandbox/` | The build sandbox: its description, seccomp filter, environment, namespace backend, build runner and backend probe |
 
 ## License
 

@@ -191,8 +191,13 @@ class Derivation(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @cached_property
     def store_path(self) -> str:
-        """The store path ``<STORE_DIR>/<store hash>-<name>``. See store_path."""
+        """The store path of the first output. See store_path."""
         return store_path(self)
+
+    @property
+    def output_paths(self) -> dict[str, str]:
+        """Map each output name to its store path, in the order of ``outputs``."""
+        return {output: output_path(self, output) for output in self.outputs}
 
     def __str__(self) -> str:
         """Return store_path, so ``f"{drv}/bin"`` in a file names a path in the store."""
@@ -255,6 +260,18 @@ def store_hash(drv: Derivation) -> str:
     return base64.b32encode(digest).decode("ascii").lower().rstrip("=")[:STORE_HASH_LEN]
 
 
+def output_path(drv: Derivation, output: str, store_dir: str = STORE_DIR) -> str:
+    """Return the store path of ``output``, one of ``drv.outputs``.
+
+    The output ``out`` is ``<store_dir>/<store hash>-<name>`` and any other
+    output adds ``-<output>``, so ``dev`` of ``hello`` is ``...-hello-dev``.
+    """
+    if output not in drv.outputs:
+        raise ValueError(f"derivation {drv.name!r} has no output {output!r}")
+    suffix = "" if output == "out" else f"-{output}"
+    return f"{store_dir}/{store_hash(drv)}-{drv.name}{suffix}"
+
+
 def store_path(drv: Derivation, store_dir: str = STORE_DIR) -> str:
-    """Return ``f"{store_dir}/{store_hash(drv)}-{drv.name}"``."""
-    return f"{store_dir}/{store_hash(drv)}-{drv.name}"
+    """Return the store path of the first output, which ``str(drv)`` gives a file."""
+    return output_path(drv, drv.outputs[0], store_dir)

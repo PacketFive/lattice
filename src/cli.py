@@ -1,15 +1,20 @@
 # SPDX-License-Identifier: GPL-2.0
 """Command line entry point, installed as ``lattice``.
 
-Phase 1 has two subcommands::
+The subcommands are::
 
     lattice [--daemon | --remote URL] eval FILE.pyb
+    lattice [--daemon | --remote URL] sandbox-config FILE.pyb [NAME]
+    lattice [--daemon | --remote URL] backend-status
     lattice daemon
 
 ``eval`` evaluates the file and prints every top-level derivation with its
-store path and canonical JSON. Nothing is built. ``daemon`` runs the
-daemon of RFC 0001 section 6.2 until interrupted. Later phases add
-``build``, ``gc``, ``switch``, ``push`` and ``materialise``.
+store path and canonical JSON. Nothing is built. ``sandbox-config`` prints
+the OCI runtime configuration of the sandbox that would build derivation
+NAME of the file, which may be left out when the file defines only one.
+``backend-status`` prints whether each sandbox backend can run. ``daemon``
+runs the daemon of RFC 0001 section 6.2 until interrupted. Later phases
+add ``build``, ``gc``, ``switch``, ``push`` and ``materialise``.
 
 Every subcommand calls one method of a LatticeAPI and only formats its
 result, so the command and the library always behave the same way. The
@@ -62,8 +67,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     Global options are ``--settings FILE``, ``--daemon``, ``--remote URL``,
     ``--ca FILE``, ``--cert FILE`` and ``--key FILE``; ``--daemon`` and
-    ``--remote`` are mutually exclusive. Phase 1 defines ``eval`` with a positional
-    ``file`` argument, and ``daemon`` with no arguments.
+    ``--remote`` are mutually exclusive. ``eval`` takes a positional
+    ``file`` argument, ``sandbox-config`` a ``file`` and an optional
+    ``name``, and ``backend-status`` and ``daemon`` take no arguments.
     """
     parser = argparse.ArgumentParser(prog="lattice", description="The PyrixOS package manager.")
     parser.add_argument("--settings", metavar="FILE", help="settings file to read")
@@ -77,6 +83,14 @@ def build_parser() -> argparse.ArgumentParser:
     evaluate = commands.add_parser("eval", help="evaluate a file and print its derivations")
     evaluate.add_argument("file", help="PyBonsai file to evaluate")
     evaluate.set_defaults(handler=cmd_eval)
+    config = commands.add_parser(
+        "sandbox-config", help="print the OCI configuration of a derivation's sandbox"
+    )
+    config.add_argument("file", help="PyBonsai file to evaluate")
+    config.add_argument("name", nargs="?", help="derivation to describe")
+    config.set_defaults(handler=cmd_sandbox_config)
+    status = commands.add_parser("backend-status", help="show which sandbox backends can run")
+    status.set_defaults(handler=cmd_backend_status)
     daemon = commands.add_parser("daemon", help="run the daemon")
     daemon.set_defaults(handler=cmd_daemon)
     return parser
@@ -116,6 +130,34 @@ def cmd_eval(args: argparse.Namespace) -> int:
     evaluation = make_api(args).evaluate(args.file)
     for drv in evaluation.derivations.values():
         print(drv.store_path, canonical_json(drv).decode())
+    return 0
+
+
+def cmd_sandbox_config(args: argparse.Namespace) -> int:
+    """Print the OCI configuration of derivation ``args.name`` of ``args.file``.
+
+    The name may be left out when the file defines one derivation. Return
+    0 on success. An unknown or missing name is a LatticeError.
+    """
+    api = make_api(args)
+    derivations = api.evaluate(args.file).derivations
+    if args.name is None:
+        if len(derivations) != 1:
+            names = ", ".join(derivations) or "none"
+            raise LatticeError(f"{args.file} defines several derivations ({names}); name one")
+        drv = next(iter(derivations.values()))
+    elif args.name in derivations:
+        drv = derivations[args.name]
+    else:
+        raise LatticeError(f"{args.file} defines no derivation named {args.name!r}")
+    print(api.sandbox_config(drv).model_dump_json(indent=2))
+    return 0
+
+
+def cmd_backend_status(args: argparse.Namespace) -> int:
+    """Print one line per sandbox backend: its name, then available or the reason. Return 0."""
+    for status in make_api(args).backend_status():
+        print(f"{status.name}: {'available' if status.available else status.reason}")
     return 0
 
 
