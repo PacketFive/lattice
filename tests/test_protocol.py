@@ -16,12 +16,14 @@ from lattice import (
     PermissionDenied,
     ProtocolError,
 )
+from lattice.derivation import Derivation
 from lattice.events import EVENTS
-from lattice.models import DerivationWire, derivation_from_wire, parse
+from lattice.models import Evaluation, parse
 from lattice.protocol import (
     INTERNAL_ERROR,
     INVALID_PARAMS,
     NOT_IMPLEMENTED,
+    DerivationParams,
     ErrorObject,
     Request,
     RPCError,
@@ -29,8 +31,6 @@ from lattice.protocol import (
     event_notification,
     raise_error,
 )
-
-not_implemented = pytest.mark.xfail(raises=NotImplementedError, reason="not implemented yet")
 
 
 def test_results_round_trip_through_json() -> None:
@@ -113,21 +113,22 @@ def test_unknown_protocol_error() -> None:
         raise_error(ErrorObject(code=-32600, message="invalid"))
 
 
-def test_derivation_wire_nests_inputs() -> None:
-    wire = parse(
-        DerivationWire,
+def test_derivation_params_nest_inputs() -> None:
+    params = parse(
+        DerivationParams,
         {
-            "name": "hello",
-            "builder": "/bin/sh",
-            "env": {"src": {"name": "src", "builder": "builtin:fetch_url"}, "x": "1"},
+            "derivation": {
+                "name": "hello",
+                "builder": "/bin/sh",
+                "env": {"src": {"name": "src", "builder": "builtin:fetch_url"}, "x": "1"},
+            }
         },
     )
-    assert isinstance(wire.env["src"], DerivationWire)
-    assert wire.outputs == ("out",)
+    assert isinstance(params.derivation.env["src"], Derivation)
+    assert params.derivation.outputs == ("out",)
 
 
-@not_implemented
-def test_derivation_round_trips_through_wire() -> None:
-    wire = DerivationWire(name="a", builder="/bin/sh")
-    drv = derivation_from_wire(wire)
-    assert drv.name == "a"
+def test_evaluation_round_trips_through_json() -> None:
+    drv = Derivation(name="a", builder="/bin/sh")
+    result = Evaluation(filename="t.pyb", derivations={"a": drv}, seconds=0.5)
+    assert parse(Evaluation, json.loads(result.model_dump_json())) == result

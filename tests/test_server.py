@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from lattice import Event, EventHandler, Identity, LatticeAPI, PermissionDenied, Role
-from lattice.protocol import NoParams
+from lattice.protocol import INVALID_PARAMS, NOT_IMPLEMENTED, NoParams
 from lattice.server import Dispatcher, authorize, may_switch
 
 ADMIN = Identity(name="root", role=Role.ADMIN, transport="unix")
@@ -150,6 +150,13 @@ def test_authorize_admin_methods() -> None:
 
 
 def test_rpc_not_implemented(factory: Factory) -> None:
+    drv = {"name": "a", "builder": "/bin/sh"}
+    request = {"jsonrpc": "2.0", "method": "check", "params": {"derivation": drv}, "id": 1}
+    reply = rpc(Dispatcher(factory), request)
+    assert reply["error"]["code"] == NOT_IMPLEMENTED
+
+
+def test_rpc_invalid_derivation(factory: Factory) -> None:
     request = {"jsonrpc": "2.0", "method": "check", "params": {"derivation": {}}, "id": 1}
     reply = rpc(Dispatcher(factory), request)
-    assert reply["error"]["code"] in (-32001, -32602)
+    assert reply["error"]["code"] == INVALID_PARAMS

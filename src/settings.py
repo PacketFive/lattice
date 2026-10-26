@@ -13,17 +13,19 @@ program only has to catch LatticeError.
 from __future__ import annotations
 
 import os
+import tomllib
 from typing import TYPE_CHECKING, Any, Literal, Self, get_args
 
 from pydantic import Field, ValidationError, model_validator
 
 from .errors import SettingsError
-from .models import Model, Role
+from .models import Model, Role, parse
 
 SandboxBackend = Literal["namespaces", "oci", "microvm"]
 SANDBOX_BACKENDS: tuple[str, ...] = get_args(SandboxBackend)
 
 DEFAULT_SOCKET = "/run/lattice/daemon.sock"
+DEFAULT_SETTINGS_PATH = "/etc/lattice/settings.toml"
 
 
 def _settings_error(error: ValidationError) -> SettingsError:
@@ -42,6 +44,11 @@ class _SettingsModel(Model):
                 super().__init__(**data)
             except ValidationError as error:
                 raise _settings_error(error) from None
+
+        # Marks __init__ as Pydantic's own, so a nested settings model is
+        # validated in the mode of the outer call (JSON for a file) instead
+        # of through this method in Python mode, which refuses lists.
+        __init__.__pydantic_base_init__ = True
 
 
 class ClientGrant(_SettingsModel):
@@ -121,9 +128,25 @@ class Settings(_SettingsModel):
 
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> Settings:
-        """Read the settings of a machine from ``path``.
+        """Read the settings of a machine from the TOML file at ``path``.
 
-        The file format is open in RFC 0001 section 18 (Settings format)
-        and is defined before Phase 5, which first needs caches and keys.
+        Top-level keys are the fields of Settings and the ``[daemon]``
+        table holds DaemonSettings. Grants are arrays of tables, written
+        ``[[daemon.clients]]`` and ``[[daemon.tokens]]``. A key the model
+        does not know is an error. A file that cannot be read, is not valid
+        TOML or holds an invalid value raises SettingsError.
         """
-        raise NotImplementedError
+        try:
+            with open(path, "rb") as file:
+                data = tomllib.load(file)
+        except OSError as error:
+            raise SettingsError(f"{os.fspath(path)}: {error.strerror or error}") from None
+        except tomllib.TOMLDecodeError as error:
+            raise SettingsError(f"{os.fspath(path)}: {error}") from None
+        try:
+            return parse(cls, data)
+        except TypeError:
+            # json.dumps refuses TOML dates and times, which no field accepts.
+            raise SettingsError(f"{os.fspath(path)}: dates and times are not settings") from None
+        except ValidationError as error:
+            raise SettingsError(f"{os.fspath(path)}: {_settings_error(error)}") from None

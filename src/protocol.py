@@ -29,9 +29,10 @@ from typing import Any, Literal, NoReturn
 from pydantic import BaseModel, ConfigDict
 
 from . import errors
+from .derivation import Derivation
 from .errors import LatticeError
 from .events import Event
-from .models import DerivationField, Model
+from .models import Model
 
 JSONRPC_VERSION = "2.0"
 API_VERSION = "1"
@@ -123,14 +124,14 @@ class EvaluateSourceParams(Model):
 class DerivationParams(Model):
     """Parameters of ``build`` and ``check``."""
 
-    derivation: DerivationField
+    derivation: Derivation
 
 
 class SwitchParams(Model):
     """Parameters of ``switch``."""
 
     profile: str
-    derivation: DerivationField
+    derivation: Derivation
 
 
 class PushParams(Model):

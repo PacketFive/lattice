@@ -15,12 +15,11 @@ from __future__ import annotations
 
 import enum
 import json
-from typing import Annotated, Literal
+from typing import Literal
 
-from pybonsai import FrozenMap
-from pydantic import BaseModel, ConfigDict, PlainSerializer, PlainValidator
+from pydantic import BaseModel, ConfigDict
 
-from .derivation import Derivation, validate_fields
+from .derivation import Derivation
 
 
 class Model(BaseModel):
@@ -41,81 +40,6 @@ def parse[M: BaseModel](model: type[M], value: object) -> M:
     return model.model_validate_json(json.dumps(value))
 
 
-class DerivationWire(Model):
-    """A Derivation as it is sent to and from the daemon.
-
-    ``hash`` and ``store_path`` are always sent. When received, they are
-    optional, and if present MUST match the values computed from the other
-    fields, so a derivation cannot arrive under a store path it does not own.
-    """
-
-    name: str
-    builder: str
-    args: tuple[str, ...] = ()
-    env: dict[str, str | DerivationWire] = {}
-    outputs: tuple[str, ...] = ("out",)
-    hash: str | None = None
-    store_path: str | None = None
-
-
-def derivation_to_wire(drv: Derivation) -> DerivationWire:
-    """Return the wire form of ``drv``, with every input derivation nested in ``env``."""
-    env: dict[str, str | DerivationWire] = {}
-    for key, value in drv.env.items():
-        env[str(key)] = derivation_to_wire(value) if isinstance(value, Derivation) else str(value)
-    return DerivationWire(
-        name=drv.name,
-        builder=drv.builder,
-        args=drv.args,
-        env=env,
-        outputs=drv.outputs,
-        hash=drv.hash,
-        store_path=drv.store_path,
-    )
-
-
-def derivation_from_wire(wire: DerivationWire) -> Derivation:
-    """Rebuild a Derivation from its wire form.
-
-    Raises ValueError or TypeError if a field is invalid (see
-    derivation.validate_fields) or if ``hash`` or ``store_path`` does not
-    match the fields.
-    """
-    env = FrozenMap(
-        {
-            key: derivation_from_wire(value) if isinstance(value, DerivationWire) else value
-            for key, value in wire.env.items()
-        }
-    )
-    validate_fields(wire.name, wire.builder, wire.args, env, wire.outputs)
-    drv = Derivation(wire.name, wire.builder, wire.args, env, wire.outputs)
-    if wire.hash is not None and wire.hash != drv.hash:
-        raise ValueError(f"derivation {wire.name!r}: hash does not match its fields")
-    if wire.store_path is not None and wire.store_path != drv.store_path:
-        raise ValueError(f"derivation {wire.name!r}: store path does not match its fields")
-    return drv
-
-
-def _validate_derivation(value: object) -> Derivation:
-    if isinstance(value, Derivation):
-        return value
-    if not isinstance(value, DerivationWire):
-        value = parse(DerivationWire, value)
-    return derivation_from_wire(value)
-
-
-def _serialize_derivation(drv: Derivation) -> dict[str, object]:
-    return derivation_to_wire(drv).model_dump(mode="json")
-
-
-DerivationField = Annotated[
-    Derivation,
-    PlainValidator(_validate_derivation),
-    PlainSerializer(_serialize_derivation),
-]
-"""A Derivation in a model: a Derivation in Python, a DerivationWire in JSON."""
-
-
 class Evaluation(Model):
     """The result of evaluating one PyBonsai file.
 
@@ -124,7 +48,7 @@ class Evaluation(Model):
     """
 
     filename: str
-    derivations: dict[str, DerivationField]
+    derivations: dict[str, Derivation]
     seconds: float
 
 
@@ -135,7 +59,7 @@ class BuildResult(Model):
     substituted from a cache instead of being built.
     """
 
-    derivation: DerivationField
+    derivation: Derivation
     store_path: str
     built: bool
     seconds: float

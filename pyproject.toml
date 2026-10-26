@@ -44,8 +44,7 @@ lattice = ["py.typed"]
 # test paths are read from the tool tables below.
 [tool.pybootstrap]
 gates = ["format", "lint", "typecheck", "test"]
-# Raised to 80 at the end of Phase 1, once the function bodies exist.
-coverage-min = 0
+coverage-min = 80
 coverage-package = "lattice"
 
 [tool.ruff]

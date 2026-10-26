@@ -3,9 +3,11 @@
 
 import json
 import re
+import warnings
 
 import pytest
 from pybonsai import FrozenMap
+from pydantic import ValidationError
 
 from lattice.derivation import (
     Derivation,
@@ -13,8 +15,6 @@ from lattice.derivation import (
     derivation_hash,
     store_path,
 )
-
-pytestmark = pytest.mark.xfail(raises=NotImplementedError, reason="not implemented yet")
 
 
 def make(name: str = "a-1", env: FrozenMap | None = None) -> Derivation:
@@ -58,3 +58,89 @@ def test_env_order_does_not_change_hash() -> None:
 
 def test_store_path_format() -> None:
     assert re.fullmatch(r"/lattice/store/[a-z2-7]{32}-a-1", store_path(make()))
+
+
+def test_store_path_is_str() -> None:
+    drv = make()
+    assert str(drv) == drv.store_path == store_path(drv)
+    assert drv.hash == derivation_hash(drv)
+
+
+def test_dependency_is_hashed_by_its_hash() -> None:
+    dep = make("dep-1")
+    top = make(env=FrozenMap({"dep": dep}))
+    assert json.loads(canonical_json(top))["env"]["dep"] == dep.hash
+
+
+def test_lists_are_stored_as_tuples() -> None:
+    fields = {"name": "a", "builder": "/bin/sh", "args": ["-c", "x"], "outputs": ["out", "dev"]}
+    drv = Derivation.model_validate(fields)
+    assert drv.args == ("-c", "x")
+    assert drv.outputs == ("out", "dev")
+
+
+def test_json_round_trip_keeps_nested_inputs() -> None:
+    top = make(env=FrozenMap({"dep": make("dep-1"), "x": "1"}))
+    data = top.model_dump_json()
+    assert json.loads(data)["store_path"] == top.store_path
+    back = Derivation.model_validate_json(data)
+    assert back == top
+    assert isinstance(back.env["dep"], Derivation)
+    assert back.env["x"] == "1"
+
+
+def test_json_round_trip_emits_no_warnings() -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        make(env=FrozenMap({"dep": make("dep-1")})).model_dump(mode="json")
+
+
+def test_claimed_hash_must_match() -> None:
+    data = json.loads(make().model_dump_json())
+    data["hash"] = "0" * 64
+    with pytest.raises(ValidationError, match="hash"):
+        Derivation.model_validate(data)
+
+
+def test_claimed_store_path_must_match() -> None:
+    data = json.loads(make().model_dump_json())
+    data["store_path"] = "/lattice/store/x-a-1"
+    with pytest.raises(ValidationError, match="store_path"):
+        Derivation.model_validate(data)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"name": "a/b"},
+        {"name": ".a"},
+        {"name": ""},
+        {"name": 1},
+        {"builder": ""},
+        {"args": [1]},
+        {"args": "ab"},
+        {"env": []},
+        {"env": {"k": 1}},
+        {"env": {"": "v"}},
+        {"outputs": []},
+        {"outputs": ["out", "out"]},
+        {"outputs": ["a/b"]},
+        {"extra": 1},
+    ],
+)
+def test_invalid_fields_are_rejected(fields: dict[str, object]) -> None:
+    with pytest.raises(ValidationError):
+        Derivation.model_validate({"name": "a", "builder": "/bin/sh"} | fields)
+
+
+def test_derivation_is_frozen() -> None:
+    drv = make()
+    with pytest.raises(ValidationError):
+        drv.name = "b"  # type: ignore[misc]
+
+
+def test_equal_derivations_hash_equal() -> None:
+    assert make() == make()
+    assert {make(), make()} == {make()}
+    assert make("a-1") != make("a-2")
+    assert make() != make().store_path

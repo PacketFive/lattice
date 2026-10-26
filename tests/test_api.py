@@ -23,8 +23,6 @@ from lattice import (
 from lattice.events import emit
 from lattice.settings import ClientGrant, DaemonSettings, TokenGrant
 
-not_implemented = pytest.mark.xfail(raises=NotImplementedError, reason="not implemented yet")
-
 SOURCE = "a = derivation(name='a', builder='/bin/sh')\nn = 1"
 
 
@@ -117,7 +115,6 @@ def test_lattice_satisfies_api_protocol() -> None:
     assert isinstance(api, LatticeAPI)
 
 
-@not_implemented
 def test_evaluate_source_returns_derivations() -> None:
     events: list[Event] = []
     result = Lattice(on_event=events.append).evaluate_source(SOURCE, "t.pyb")
@@ -128,7 +125,6 @@ def test_evaluate_source_returns_derivations() -> None:
     assert events[-1].derivations == 1
 
 
-@not_implemented
 def test_evaluate_reads_file(tmp_path: Path) -> None:
     path = tmp_path / "t.pyb"
     path.write_text(SOURCE, encoding="utf-8")
@@ -137,7 +133,6 @@ def test_evaluate_reads_file(tmp_path: Path) -> None:
     assert list(result.derivations) == ["a"]
 
 
-@not_implemented
 def test_evaluation_error_is_wrapped() -> None:
     with pytest.raises(EvaluationFailed) as info:
         Lattice().evaluate_source("import os", "t.pyb")
@@ -145,6 +140,56 @@ def test_evaluation_error_is_wrapped() -> None:
     assert "t.pyb" in str(info.value)
 
 
-@not_implemented
-def test_settings_load() -> None:
-    Settings.load("lattice.toml")
+SETTINGS_TOML = """
+sandbox_backend = "oci"
+substituters = ["https://cache.example.org"]
+
+[daemon]
+listen = "0.0.0.0:7443"
+tls_cert = "/etc/lattice/cert.pem"
+tls_key = "/etc/lattice/key.pem"
+
+[[daemon.tokens]]
+name = "ci"
+sha256 = "%s"
+role = "admin"
+""" % ("a" * 64)
+
+
+def test_settings_load(tmp_path: Path) -> None:
+    path = tmp_path / "settings.toml"
+    path.write_text(SETTINGS_TOML, encoding="utf-8")
+    settings = Settings.load(path)
+    assert settings.sandbox_backend == "oci"
+    assert settings.substituters == ("https://cache.example.org",)
+    assert settings.daemon.listen == "0.0.0.0:7443"
+    assert settings.daemon.tokens[0].name == "ci"
+
+
+def test_settings_load_empty_file_is_defaults(tmp_path: Path) -> None:
+    path = tmp_path / "settings.toml"
+    path.write_text("", encoding="utf-8")
+    assert Settings.load(path) == Settings()
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "unknown = 1",
+        "sandbox_backend = 3",
+        "when = 1979-05-27",
+        "= not toml",
+        '[daemon]\nlisten = "0.0.0.0:7443"',
+        '[[daemon.tokens]]\nname = "a"\nsha256 = "x"',
+    ],
+)
+def test_settings_load_rejects_bad_files(tmp_path: Path, text: str) -> None:
+    path = tmp_path / "settings.toml"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(SettingsError, match="settings.toml"):
+        Settings.load(path)
+
+
+def test_settings_load_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(SettingsError, match="missing.toml"):
+        Settings.load(tmp_path / "missing.toml")

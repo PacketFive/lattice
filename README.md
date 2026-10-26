@@ -15,11 +15,10 @@ library (`derivation`, `fetch_url`, `stack`, `profile`) through a
 ## Status
 
 Phase 1: derivations, the standard library, the `Lattice` library
-interface, the daemon with its JSON-RPC and REST interface, `Client` and
-`lattice eval`. The daemon, protocol and client work and are tested over a
-Unix socket and TLS.
-Evaluation and derivation function bodies raise `NotImplementedError` and the tests are marked as
-expected failures until the code is written. The sandbox, store,
+interface, the settings file, the daemon with its JSON-RPC and REST
+interface, `Client` and the `lattice eval` and `lattice daemon` commands.
+All of these work and are tested, the daemon over a Unix socket and TLS.
+`stack` and `profile` are declared and belong to Phase 4. The sandbox, store,
 dependency database, garbage collector, profiles and binary caches follow
 in later phases (see the development plan in the PyrixOS repository).
 
@@ -49,6 +48,32 @@ From the command line:
 
 ```sh
 lattice eval hello.pyb
+lattice --daemon eval hello.pyb
+lattice --remote https://builder.example:7420 --ca ca.pem eval hello.pyb
+```
+
+`eval` prints one line per derivation: its store path and its canonical
+JSON. It exits with 1 and a message on standard error if the file is
+rejected or fails. `--remote` reads a bearer token from the `LATTICE_TOKEN`
+environment variable, never from the command line.
+
+Settings are read from `/etc/lattice/settings.toml` if it exists, or from
+the file given with `--settings`. Without a file the defaults apply.
+
+```toml
+sandbox_backend = "namespaces"
+substituters = ["https://cache.example.org"]
+trusted_keys = ["cache.example.org-1:..."]
+
+[daemon]
+listen = "0.0.0.0:7420"
+tls_cert = "/etc/lattice/tls/cert.pem"
+tls_key = "/etc/lattice/tls/key.pem"
+
+[[daemon.tokens]]
+name = "ci"
+sha256 = "<SHA-256 of the token, 64 hex characters>"
+role = "user"
 ```
 
 From Python, in your own tools:
@@ -125,11 +150,11 @@ until their phase is complete.
 | Module | Role |
 | --- | --- |
 | `api.py` | The `Lattice` class |
-| `models.py` | Pydantic result models, roles and the derivation wire form |
+| `models.py` | Pydantic result models and roles |
 | `settings.py` | `Settings` and `DaemonSettings`, what one machine uses to build, fetch and serve |
 | `errors.py` | `LatticeError` and its subclasses |
 | `events.py` | Progress events passed to `on_event` and logged |
-| `derivation.py` | The Derivation type, canonical JSON, hashes and store paths |
+| `derivation.py` | The Pydantic Derivation model, canonical JSON, hashes and store paths |
 | `stdlib.py` | Standard library functions and the PyBonsai host |
 | `protocol.py` | JSON-RPC 2.0 and REST messages, parameters and error codes |
 | `server.py` | Method table, permission checks and request dispatch |
