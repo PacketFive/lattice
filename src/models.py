@@ -76,11 +76,29 @@ class GCResult(Model):
 
 
 class Generation(Model):
-    """One generation of a profile (section 13.1)."""
+    """One generation of a profile (section 13.1).
+
+    ``current`` is true for the generation the profile link points at.
+    """
 
     profile: str
     number: int
     store_path: str
+    current: bool = False
+
+
+class SlotState(Model):
+    """One slot (section 13.2).
+
+    ``active`` is the stack the slot symlink points at and ``wanted`` the
+    stack the current ``system`` generation assigns to the slot. Either is
+    None if there is none. They differ while a change is deferred until
+    the next boot.
+    """
+
+    slot: str
+    active: str | None
+    wanted: str | None
 
 
 class Role(enum.StrEnum):

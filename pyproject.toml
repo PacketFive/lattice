@@ -33,7 +33,7 @@ version = { attr = "lattice.__version__" }
 
 # The repository's src directory is the lattice package itself.
 [tool.setuptools]
-packages = ["lattice", "lattice.sandbox", "lattice.store"]
+packages = ["lattice", "lattice.kmod", "lattice.profiles", "lattice.sandbox", "lattice.store"]
 package-dir = { lattice = "src" }
 
 # PEP 561 marker: the package ships its own type hints.

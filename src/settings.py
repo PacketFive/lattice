@@ -27,6 +27,7 @@ SANDBOX_BACKENDS: tuple[str, ...] = get_args(SandboxBackend)
 DEFAULT_SOCKET = "/run/lattice/daemon.sock"
 DEFAULT_SETTINGS_PATH = "/etc/lattice/settings.toml"
 DEFAULT_STORE_ROOT = "/lattice"
+DEFAULT_STACKS = "/run/lattice/stacks"
 
 
 def _settings_error(error: ValidationError) -> SettingsError:
@@ -132,16 +133,19 @@ class StoreSettings(_SettingsModel):
     their names under ``/lattice/store`` wherever ``root`` is, so a store
     under another root is for testing and for preparing a store that is
     later moved into place. ``max_jobs`` is the number of builds that may
-    run in parallel.
+    run in parallel. ``stacks`` is the directory of slot symlinks
+    (section 13.2).
     """
 
     root: str = DEFAULT_STORE_ROOT
     max_jobs: int = Field(default=1, ge=1, le=256)
+    stacks: str = DEFAULT_STACKS
 
     @model_validator(mode="after")
     def _check_root(self) -> Self:
-        if not os.path.isabs(self.root) or os.path.normpath(self.root) != self.root:
-            raise ValueError(f"store root must be a normalised absolute path, not {self.root!r}")
+        for name, value in (("root", self.root), ("stacks", self.stacks)):
+            if not os.path.isabs(value) or os.path.normpath(value) != value:
+                raise ValueError(f"store {name} must be a normalised absolute path, not {value!r}")
         return self
 
 

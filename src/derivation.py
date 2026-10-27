@@ -43,6 +43,9 @@ STORE_HASH_LEN = 32
 # A builder that Lattice provides itself instead of a program in the
 # sandbox. fetch_url uses it, with ``url`` and ``sha256`` in ``env``.
 BUILTIN_FETCH_URL = "builtin:fetch_url"
+# Builders that combine their inputs into one tree of symlinks (section 13).
+BUILTIN_STACK = "builtin:stack"
+BUILTIN_PROFILE = "builtin:profile"
 
 _COMPUTED = ("hash", "store_path")
 

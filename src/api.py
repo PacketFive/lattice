@@ -34,10 +34,12 @@ from typing import TYPE_CHECKING
 import pybonsai
 from pybonsai import FrozenMap, Host, PyBonsaiError
 
-from .derivation import Derivation
-from .errors import EvaluationFailed, StoreError
-from .events import EvaluationFinished, EvaluationStarted, EventHandler, emit
-from .models import BuildResult, Evaluation, GCResult, Generation
+from . import profiles
+from .derivation import BUILTIN_PROFILE, Derivation
+from .errors import ActivationFailed, EvaluationFailed, StoreError
+from .events import EvaluationFinished, EvaluationStarted, EventHandler, ProfileSwitched, emit
+from .kmod import KernelModules, LinuxModules
+from .models import BuildResult, Evaluation, GCResult, Generation, SlotState
 from .sandbox import BackendStatus, OciConfig, make_spec, oci_config
 from .sandbox import backend_status as probe_backends
 from .sandbox.libc import machine
@@ -57,6 +59,7 @@ from .store import (
     lock,
 )
 from .store.builder import direct_inputs
+from .store.combine import profile_manifest
 
 if TYPE_CHECKING:
     from .sandbox import Backend
@@ -68,7 +71,8 @@ class Lattice:
     ``settings`` defaults to Settings(). ``on_event`` receives an Event for
     each step of an operation (see events.py). ``backend`` is the sandbox
     backend for builds; None chooses the one the settings name when the
-    first build needs it.
+    first build needs it. ``kernel_modules`` loads and unloads the kernel
+    modules of stacks; None uses the running Linux kernel.
 
     The store under ``settings.store.root`` is created by the first
     operation that writes to it. Operations that only read it raise
@@ -81,12 +85,14 @@ class Lattice:
         *,
         on_event: EventHandler | None = None,
         backend: Backend | None = None,
+        kernel_modules: KernelModules | None = None,
     ) -> None:
-        """Store the settings, event handler and backend. Nothing is read or created."""
+        """Store the settings, event handler and backends. Nothing is read or created."""
         self.settings = settings if settings is not None else Settings()
         self.on_event = on_event
         self.backend = backend
-        self.layout = StoreLayout(root=self.settings.store.root)
+        self.kernel_modules = kernel_modules if kernel_modules is not None else LinuxModules()
+        self.layout = StoreLayout(root=self.settings.store.root, stacks=self.settings.store.stacks)
         self._host: Host | None = None
 
     def _get_host(self) -> Host:
@@ -274,8 +280,124 @@ class Lattice:
             connection.close()
 
     def switch(self, profile: str, drv: Derivation) -> Generation:
-        """Build ``drv`` and make it the current generation of ``profile``. Phase 4."""
-        raise NotImplementedError
+        """Build ``drv`` and make it the current generation of ``profile``. Phase 4.
+
+        The new generation gets the next number and a GC root. For the
+        ``system`` profile the slots then change to the stacks it assigns
+        (section 13.3); if they cannot change now, an ActivationDeferred
+        event says why and they change at the next boot. Raises
+        ActivationFailed if a kernel module step fails, leaving the
+        previous generation current, and if a profile other than
+        ``system`` assigns stacks.
+        """
+        profiles.check_profile_name(profile)
+        if profile != profiles.SYSTEM and drv.builder == BUILTIN_PROFILE:
+            if profile_manifest(drv).stacks:
+                raise ActivationFailed(f"only the {profiles.SYSTEM} profile may assign stacks")
+        connection = database.connect(self.layout, create=True)
+        try:
+            # Shared from the build until the root exists, so collection cannot remove the output.
+            with lock.shared(self.layout):
+                path = self.build(drv).store_path
+                with lock.profiles(self.layout):
+                    profiles.prepare(self.layout, profile)
+                    number = max(profiles.numbers(self.layout, profile), default=0) + 1
+                    database.add_root(connection, profiles.root_name(profile, number), path)
+                    profiles.replace_link(profiles.link_path(self.layout, profile, number), path)
+                    return self._make_current(profile, number, path)
+        finally:
+            connection.close()
+
+    def _make_current(self, profile: str, number: int, path: str) -> Generation:
+        """Activate generation ``number`` if it is ``system``'s, then point the profile at it."""
+        stacks = profiles.wanted(self.layout, path)
+        if profile == profiles.SYSTEM:
+            profiles.activate(self.layout, self.kernel_modules, stacks, self.on_event)
+        elif stacks:
+            raise ActivationFailed(f"only the {profiles.SYSTEM} profile may assign stacks")
+        generation_link = profiles.link_path(self.layout, profile, number)
+        profiles.replace_link(
+            profiles.link_path(self.layout, profile), os.path.basename(generation_link)
+        )
+        emit(self.on_event, ProfileSwitched(profile=profile, number=number, store_path=path))
+        return Generation(profile=profile, number=number, store_path=path, current=True)
+
+    def rollback(self, profile: str, generation: int | None = None) -> Generation:
+        """Make an existing generation of ``profile`` current again. Phase 4.
+
+        ``generation`` defaults to the newest one older than the current
+        generation. Activation is as for switch. Raises StoreError if the
+        generation does not exist.
+        """
+        profiles.check_profile_name(profile)
+        if not self.layout.exists():
+            raise StoreError(f"no store at {self.layout.root}")
+        with lock.profiles(self.layout):
+            if generation is None:
+                now = profiles.current(self.layout, profile)
+                earlier = [
+                    n for n in profiles.numbers(self.layout, profile) if now is None or n < now
+                ]
+                if not earlier:
+                    raise StoreError(f"profile {profile!r} has no earlier generation")
+                generation = earlier[-1]
+            path = profiles.store_path(self.layout, profile, generation)
+            return self._make_current(profile, generation, path)
+
+    def generations(self, profile: str) -> tuple[Generation, ...]:
+        """Return every generation of ``profile``, oldest first. Phase 4."""
+        profiles.check_profile_name(profile)
+        return profiles.generations(self.layout, profile)
+
+    def delete_generations(self, profile: str, keep: int) -> tuple[Generation, ...]:
+        """Delete all but the newest ``keep`` generations and the current one. Phase 4.
+
+        Their roots are removed, so the next collection can reclaim what
+        only they used. Returns the deleted generations.
+        """
+        profiles.check_profile_name(profile)
+        if keep < 0:
+            raise StoreError("keep must not be negative")
+        if not self.layout.exists():
+            return ()
+        connection = self._connect()
+        try:
+            with lock.profiles(self.layout):
+                existing = profiles.generations(self.layout, profile)
+                kept = (
+                    {g.number for g in existing[max(len(existing) - keep, 0) :]} if keep else set()
+                )
+                deleted = tuple(g for g in existing if g.number not in kept and not g.current)
+                for generation in deleted:
+                    os.unlink(profiles.link_path(self.layout, profile, generation.number))
+                    try:
+                        database.remove_root(
+                            connection, profiles.root_name(profile, generation.number)
+                        )
+                    except StoreError:
+                        pass
+                return deleted
+        finally:
+            connection.close()
+
+    def slots(self) -> tuple[SlotState, ...]:
+        """Return every slot that is active or that the current system generation wants. Phase 4."""
+        return profiles.states(self.layout)
+
+    def activate_boot(self) -> tuple[SlotState, ...]:
+        """Load the kernel modules and create the slots of the current system generation. Phase 4.
+
+        Runs once at boot, before any service starts. Library and command
+        only; the daemon does not offer it. Raises ActivationFailed after
+        setting every slot if a module did not load.
+        """
+        if self.layout.exists():
+            with lock.profiles(self.layout):
+                wanted = profiles.wanted(self.layout, profiles.system_environment(self.layout))
+                profiles.boot(self.layout, self.kernel_modules, wanted, self.on_event)
+        else:
+            profiles.boot(self.layout, self.kernel_modules, {}, self.on_event)
+        return profiles.states(self.layout)
 
     def push(self, paths: Iterable[str], cache: str) -> None:
         """Sign and upload store paths and their provenance to ``cache``. Phase 5."""

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
-"""Finding the store paths running processes use (RFC 0001 section 12).
+"""Finding the store paths and device files running processes use (RFC 0001 sections 12, 13).
 
 Collection keeps every store path a running process has open, maps into
 memory, runs or works in, even if no root refers to it. scan reads this
@@ -10,6 +10,7 @@ only see its own processes; the daemon runs as root and sees them all.
 
 from __future__ import annotations
 
+import fnmatch
 import os
 
 from .derivation import STORE_DIR
@@ -76,4 +77,35 @@ def scan(host_store: str, proc_root: str = "/proc") -> tuple[ProcessUse, ...]:
             path = _store_path(target, prefixes)
             if path is not None:
                 uses.add((int(entry), path))
+    return tuple(ProcessUse(pid=pid, path=path) for pid, path in sorted(uses))
+
+
+def open_devices(patterns: tuple[str, ...], proc_root: str = "/proc") -> tuple[ProcessUse, ...]:
+    """Return each open file matching one of the glob ``patterns``, sorted by pid and path.
+
+    Used to find processes that hold a stack's device files open (section
+    13.3). ``path`` is the device file, not a store path.
+    """
+    if not patterns:
+        return ()
+    uses: set[tuple[int, str]] = set()
+    try:
+        entries = os.listdir(proc_root)
+    except OSError:
+        return ()
+    for entry in entries:
+        if not entry.isdigit():
+            continue
+        fd_dir = os.path.join(proc_root, entry, "fd")
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(os.path.join(fd_dir, fd))
+            except OSError:
+                continue
+            if any(fnmatch.fnmatchcase(target, pattern) for pattern in patterns):
+                uses.add((int(entry), target))
     return tuple(ProcessUse(pid=pid, path=path) for pid, path in sorted(uses))

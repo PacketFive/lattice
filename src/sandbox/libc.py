@@ -37,8 +37,20 @@ MACHINES: tuple[str, ...] = ("x86_64", "aarch64")
 
 # System call numbers that glibc has no wrapper for.
 _SYSCALLS: dict[str, dict[str, int]] = {
-    "x86_64": {"pivot_root": 155, "capset": 126},
-    "aarch64": {"pivot_root": 41, "capset": 91},
+    "x86_64": {
+        "pivot_root": 155,
+        "capset": 126,
+        "init_module": 175,
+        "delete_module": 176,
+        "finit_module": 313,
+    },
+    "aarch64": {
+        "pivot_root": 41,
+        "capset": 91,
+        "init_module": 105,
+        "delete_module": 106,
+        "finit_module": 273,
+    },
 }
 
 _LINUX_CAPABILITY_VERSION_3 = 0x20080522
@@ -145,3 +157,25 @@ def drop_capabilities() -> None:
     header = _CapHeader(_LINUX_CAPABILITY_VERSION_3, 0)
     data = (_CapData * 2)()
     _check(_syscall("capset", ctypes.byref(header), ctypes.byref(data)), "capset")
+
+
+O_NONBLOCK = os.O_NONBLOCK
+
+
+def finit_module(fd: int, params: str = "") -> None:
+    """Load the kernel module in the open file ``fd`` with ``params``."""
+    result = _syscall("finit_module", ctypes.c_int(fd), _encode(params), ctypes.c_int(0))
+    _check(result, "finit_module")
+
+
+def init_module(image: bytes, params: str = "") -> None:
+    """Load the kernel module whose uncompressed contents are ``image``."""
+    buffer = ctypes.create_string_buffer(image, len(image))
+    result = _syscall("init_module", buffer, ctypes.c_ulong(len(image)), _encode(params))
+    _check(result, "init_module")
+
+
+def delete_module(name: str) -> None:
+    """Unload the kernel module ``name``, failing at once if it is in use."""
+    result = _syscall("delete_module", _encode(name), ctypes.c_uint(O_NONBLOCK))
+    _check(result, "delete_module")

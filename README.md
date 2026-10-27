@@ -18,7 +18,6 @@ Phase 1: derivations, the standard library, the `Lattice` library
 interface, the settings file, the daemon with its JSON-RPC and REST
 interface, `Client` and the `lattice eval` and `lattice daemon` commands.
 All of these work and are tested, the daemon over a Unix socket and TLS.
-`stack` and `profile` are declared and belong to Phase 4.
 
 Phase 2: the build sandbox. Each build runs in fresh Linux user, mount,
 network, PID, UTS and IPC namespaces, with no capabilities, no new
@@ -33,8 +32,17 @@ and records it with its run-time references in an SQLite database.
 `fetch_url` derivations are downloaded and checked against their SHA-256
 digest. `lattice check` builds a registered derivation again and reports
 the files that differ, and `lattice gc` removes every path that no root and
-no running process uses. The OCI and microVM backends, profiles and binary
-caches follow in later phases (see the development plan in the PyrixOS
+no running process uses.
+
+Phase 4: profiles and stacks. `lattice switch` builds an environment and
+makes it the next generation of a profile, `lattice rollback` makes an
+earlier one current again, and every generation is a garbage collection
+root. `stack` combines packages, kernel modules and device patterns into
+one version of a stack, and the `system` profile assigns one stack to each
+slot. A switch changes the kernel modules of a slot only while their
+devices are closed and the modules are unused, and otherwise defers the
+change to the next boot. The OCI and microVM backends and binary caches
+follow in later phases (see the development plan in the PyrixOS
 repository).
 
 ## Install
@@ -82,6 +90,30 @@ lattice remove-root per-user/me/hello
 lattice gc
 ```
 
+Profiles and stacks:
+
+```sh
+lattice switch system.pyb system              # profile "system" by default
+lattice switch --profile per-user/me env.pyb  # a user's own profile
+lattice generations                           # "(current)" marks the current one
+lattice rollback                              # or: lattice rollback 41
+lattice delete-generations --keep 5
+lattice slots                                 # active stack, and the next boot's if it differs
+lattice activate-boot                         # run once at boot, before services
+```
+
+```python
+# system.pyb
+nvidia_570 = stack(
+    slot="nvidia",
+    name="nvidia-570",
+    contents=[nvidia_driver_570, cuda_12_8],
+    kernel_modules=[nvidia_kmod_570],
+    devices=["/dev/nvidia*"],
+)
+system = profile(name="system", packages=[slurm], stacks={"nvidia": nvidia_570})
+```
+
 Without `NAME`, a command that takes `FILE [NAME]` uses the only derivation
 the file defines. Build progress is printed on standard error. A build adds
 no root, so its outputs are kept by the next `gc` only if a root names them. `lattice sandbox-config FILE [NAME]` prints the OCI configuration of
@@ -101,6 +133,7 @@ trusted_keys = ["cache.example.org-1:..."]
 [store]
 root = "/lattice"     # store, staging and database live below this
 max_jobs = 4          # derivations built at once, 1 by default
+stacks = "/run/lattice/stacks"  # slot symlinks, this by default
 
 [sandbox]
 timeout = 3600

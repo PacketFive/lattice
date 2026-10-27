@@ -6,16 +6,18 @@ that name is what builds record in their outputs. StoreLayout maps that
 name to the directory that holds it, which is ``<root>/store/<hash>-<name>``,
 so a store under a temporary root behaves like the real one.
 
-================  ==========================================================
-Path              Contents
-================  ==========================================================
-``store``         The store paths, read-only once registered
-``staging``       Build working directories and per-derivation lock files,
-                  on the same filesystem as ``store`` so a rename publishes
-``var/db.sqlite`` The dependency database (section 11)
-``var/lock``      The store lock (section 12)
-``var/db.lock``   Held while a connection sets up and migrates the database
-================  ==========================================================
+======================  ========================================================
+Path                    Contents
+======================  ========================================================
+``store``               The store paths, read-only once registered
+``staging``             Build working directories and per-derivation lock files,
+                        on the same filesystem as ``store`` so a rename publishes
+``var/db.sqlite``       The dependency database (section 11)
+``var/lock``            The store lock (section 12)
+``var/db.lock``         Held while a connection sets up and migrates the database
+``var/profiles.lock``   Held while a profile or slot changes (section 13)
+``profiles``            Profile and generation symlinks (section 13.1)
+======================  ========================================================
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import re
 from ..derivation import STORE_DIR
 from ..errors import StoreError
 from ..models import Model
+from ..settings import DEFAULT_STACKS
 
 _BASENAME = re.compile(r"[0-9a-z]{32}-[A-Za-z0-9+._?=-]+")
 
@@ -43,9 +46,15 @@ def check_store_path(path: str) -> str:
 
 
 class StoreLayout(Model):
-    """The directories of a store whose files are under ``root``."""
+    """The directories of a store whose files are under ``root``.
+
+    ``stacks`` is the directory of slot symlinks (section 13.2). It is
+    outside ``root`` because slots describe the running system and are
+    created again at every boot.
+    """
 
     root: str
+    stacks: str = DEFAULT_STACKS
 
     @property
     def store(self) -> str:
@@ -71,6 +80,29 @@ class StoreLayout(Model):
     def database_lock(self) -> str:
         """The file locked while a connection sets up the database."""
         return os.path.join(self.root, "var", "db.lock")
+
+    @property
+    def profiles_lock(self) -> str:
+        """The file locked while a profile or slot changes."""
+        return os.path.join(self.root, "var", "profiles.lock")
+
+    @property
+    def profiles(self) -> str:
+        """The directory of profile and generation symlinks."""
+        return os.path.join(self.root, "profiles")
+
+    def active_slots(self) -> dict[str, str]:
+        """Return the store path each slot symlink in ``stacks`` points at, by slot name."""
+        found: dict[str, str] = {}
+        try:
+            names = sorted(os.listdir(self.stacks))
+        except FileNotFoundError:
+            return found
+        for name in names:
+            link = os.path.join(self.stacks, name)
+            if not name.startswith(".") and os.path.islink(link):
+                found[name] = os.readlink(link)
+        return found
 
     def physical(self, path: str) -> str:
         """Return the directory that holds store path ``path``."""

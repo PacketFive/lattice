@@ -50,6 +50,11 @@ def database(layout: StoreLayout) -> AbstractContextManager[None]:
     return _flock(layout.database_lock, fcntl.LOCK_EX)
 
 
+def profiles(layout: StoreLayout) -> AbstractContextManager[None]:
+    """Hold the lock that serialises changes to profiles and slots."""
+    return _flock(layout.profiles_lock, fcntl.LOCK_EX)
+
+
 def derivation(layout: StoreLayout, drv_hash: str) -> AbstractContextManager[None]:
     """Hold the lock of the derivation whose store hash is ``drv_hash``."""
     return _flock(os.path.join(layout.staging, f"{drv_hash}.lock"), fcntl.LOCK_EX)

@@ -63,6 +63,7 @@ def collect(layout: StoreLayout, on_event: EventHandler | None = None) -> GCResu
     try:
         with lock.exclusive(layout):
             in_use = {use.path for use in procscan.scan(layout.store)}
+            in_use.update(layout.active_slots().values())
             live = database.live_paths(connection, in_use)
             dead = set(database.all_paths(connection)) - live
             edges = {

@@ -5,13 +5,17 @@ FakeAPI satisfies LatticeAPI without evaluating or building anything, so
 the daemon, protocol and client are tested apart from the operations
 behind them. StoreBackend is a sandbox backend that runs a small Python
 program instead of the sandbox helper, so the store is tested on any
-machine.
+machine. module_image builds a minimal kernel module file and FakeKernel
+stands in for the running kernel, so activation is tested without
+loading real modules.
 """
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
+import struct
 import subprocess
 import sys
 import threading
@@ -21,6 +25,7 @@ from datetime import UTC, datetime
 import pytest
 
 from lattice import (
+    ActivationFailed,
     BuildResult,
     Derivation,
     Evaluation,
@@ -30,8 +35,12 @@ from lattice import (
     GCResult,
     Generation,
     LatticeAPI,
+    ProfileSwitched,
     SandboxSettings,
+    SlotState,
 )
+from lattice.kmod import LoadedModule, read_info
+from lattice.procscan import ProcessUse
 from lattice.sandbox import BackendStatus, OciConfig, SandboxJob, make_spec, oci_config
 from lattice.store import BuildPlan, GCRootInfo, StorePathInfo, VerifyResult
 
@@ -92,7 +101,31 @@ class FakeAPI:
         return (GCRootInfo(name="system", path="/lattice/store/a-x", created_at=CREATED),)
 
     def switch(self, profile: str, drv: Derivation) -> Generation:
-        raise NotImplementedError
+        if self.on_event is not None:
+            self.on_event(ProfileSwitched(profile=profile, number=2, store_path=drv.store_path))
+        return Generation(profile=profile, number=2, store_path=drv.store_path, current=True)
+
+    def rollback(self, profile: str, generation: int | None = None) -> Generation:
+        number = 1 if generation is None else generation
+        return Generation(
+            profile=profile, number=number, store_path="/lattice/store/a-x", current=True
+        )
+
+    def generations(self, profile: str) -> tuple[Generation, ...]:
+        return (
+            Generation(profile=profile, number=1, store_path="/lattice/store/a-x"),
+            Generation(profile=profile, number=2, store_path="/lattice/store/b-y", current=True),
+        )
+
+    def delete_generations(self, profile: str, keep: int) -> tuple[Generation, ...]:
+        return (
+            ()
+            if keep
+            else (Generation(profile=profile, number=1, store_path="/lattice/store/a-x"),)
+        )
+
+    def slots(self) -> tuple[SlotState, ...]:
+        return (SlotState(slot="nvidia", active="/lattice/store/a-s", wanted="/lattice/store/b-s"),)
 
     def push(self, paths: Iterable[str], cache: str) -> None:
         return None
@@ -165,3 +198,89 @@ def new_backend() -> Callable[..., StoreBackend]:
 @pytest.fixture
 def store_backend() -> StoreBackend:
     return StoreBackend()
+
+
+def module_image(fields: dict[str, str], *, order: str = "<") -> bytes:
+    """Return an ELF64 relocatable file whose ``.modinfo`` section holds ``fields``."""
+    info = b"".join(f"{key}={value}".encode() + b"\0" for key, value in fields.items())
+    names = b"\0.modinfo\0.shstrtab\0"
+    info_offset = 64
+    names_offset = info_offset + len(info)
+    table = (names_offset + len(names) + 7) // 8 * 8
+    ident = b"\x7fELF" + bytes([2, 1 if order == "<" else 2, 1]) + bytes(9)
+    header = struct.pack(
+        order + "16sHHIQQQIHHHHHH", ident, 1, 62, 1, 0, 0, table, 0, 64, 0, 0, 64, 3, 2
+    )
+    sections = [
+        (0, 0, 0, 0),
+        (1, 1, info_offset, len(info)),
+        (10, 3, names_offset, len(names)),
+    ]
+    image = bytearray(header + info + names)
+    image += bytes(table - len(image))
+    for name, kind, offset, size in sections:
+        image += struct.pack(order + "IIQQQQIIQQ", name, kind, 0, 0, offset, size, 0, 0, 1, 0)
+    return bytes(image)
+
+
+class FakeKernel:
+    """KernelModules for a pretend kernel that records every change in ``log``.
+
+    Loading a module file whose path contains a string in ``failing`` fails. ``devices`` are
+    the device files processes have open.
+    """
+
+    def __init__(self, release: str = "6.12.0") -> None:
+        self.kernel_release = release
+        self.modules: dict[str, LoadedModule] = {}
+        self.failing: set[str] = set()
+        self.devices: list[ProcessUse] = []
+        self.log: list[str] = []
+
+    def release(self) -> str:
+        return self.kernel_release
+
+    def loaded(self) -> dict[str, LoadedModule]:
+        return dict(self.modules)
+
+    def load(self, path: str) -> None:
+        info = read_info(path)
+        if any(part in path for part in self.failing) or info.name in self.modules:
+            raise ActivationFailed(f"cannot load {path}")
+        for dependency in info.depends:
+            used = self.modules[dependency]
+            self.modules[dependency] = LoadedModule(
+                name=dependency, refcount=used.refcount + 1, holders=(*used.holders, info.name)
+            )
+        self.modules[info.name] = LoadedModule(name=info.name, refcount=0, holders=())
+        self.log.append(f"load {info.name}")
+
+    def unload(self, name: str) -> None:
+        module = self.modules.get(name)
+        if module is None or module.refcount:
+            raise ActivationFailed(f"cannot unload {name}")
+        del self.modules[name]
+        for other, used in list(self.modules.items()):
+            if name in used.holders:
+                holders = tuple(h for h in used.holders if h != name)
+                self.modules[other] = LoadedModule(
+                    name=other, refcount=used.refcount - 1, holders=holders
+                )
+        self.log.append(f"unload {name}")
+
+    def open_devices(self, patterns: tuple[str, ...]) -> tuple[ProcessUse, ...]:
+        return tuple(
+            use
+            for use in self.devices
+            if any(fnmatch.fnmatchcase(use.path, pattern) for pattern in patterns)
+        )
+
+
+@pytest.fixture
+def kernel() -> FakeKernel:
+    return FakeKernel()
+
+
+@pytest.fixture
+def make_module() -> Callable[..., bytes]:
+    return module_image

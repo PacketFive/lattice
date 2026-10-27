@@ -19,10 +19,11 @@ Names in ``__all__`` follow semantic versioning from release 1.0. A name
 is removed only after one minor release in which using it raises a
 DeprecationWarning. Modules and names not listed here are internal.
 
-Phase 1 provides derivations, the standard library and evaluation, and
-Phase 2 the build sandbox (the ``lattice.sandbox`` package). Later phases
-add the store, the dependency database, the garbage collector, profiles
-and binary caches as modules of this package.
+Phase 1 provides derivations, the standard library and evaluation,
+Phase 2 the build sandbox (``lattice.sandbox``), Phase 3 the store, the
+dependency database and the garbage collector (``lattice.store``), and
+Phase 4 profiles, slots and kernel modules (``lattice.profiles`` and
+``lattice.kmod``). Phase 5 adds binary caches.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ from .api import Lattice
 from .client import DEFAULT_URL, Client, LatticeAPI
 from .derivation import Derivation
 from .errors import (
+    ActivationFailed,
     AuthenticationFailed,
     BackendUnavailable,
     BuildFailed,
@@ -43,6 +45,7 @@ from .errors import (
     SubstitutionFailed,
 )
 from .events import (
+    ActivationDeferred,
     BuildFinished,
     BuildLog,
     BuildStarted,
@@ -51,8 +54,13 @@ from .events import (
     EvaluationStarted,
     Event,
     EventHandler,
+    KernelModuleLoaded,
+    KernelModuleUnloaded,
+    ProfileSwitched,
+    SlotChanged,
 )
-from .models import BuildResult, Evaluation, GCResult, Generation, Identity, Role
+from .kmod import KernelModules, LinuxModules, LoadedModule, ModuleInfo
+from .models import BuildResult, Evaluation, GCResult, Generation, Identity, Role, SlotState
 from .sandbox import BackendStatus, OciConfig
 from .settings import (
     DEFAULT_SOCKET,
@@ -71,6 +79,17 @@ from .transport import Daemon
 __version__ = "0.0.0"
 
 __all__ = [
+    "ActivationDeferred",
+    "ActivationFailed",
+    "KernelModuleLoaded",
+    "KernelModuleUnloaded",
+    "KernelModules",
+    "LinuxModules",
+    "LoadedModule",
+    "ModuleInfo",
+    "ProfileSwitched",
+    "SlotChanged",
+    "SlotState",
     "VerifyResult",
     "StoreSettings",
     "StorePathInfo",

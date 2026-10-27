@@ -23,13 +23,14 @@ import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from typing import TYPE_CHECKING, Literal
 
-from ..derivation import BUILTIN_FETCH_URL, Derivation
+from ..derivation import BUILTIN_FETCH_URL, BUILTIN_PROFILE, BUILTIN_STACK, Derivation
 from ..errors import BuildFailed, StoreError
 from ..events import BuildFinished, BuildLog, BuildStarted, EventHandler, emit
 from ..models import BuildResult, Model
 from ..sandbox.runner import BuildRequest, run_build
 from ..settings import Settings
 from . import database, lock
+from .combine import combine
 from .fetch import fetch
 from .layout import StoreLayout
 from .realise import realise, remove_tree, scan
@@ -246,6 +247,8 @@ class Builder:
             destination = os.path.join(work, "out")
             fetch(drv, destination)
             return {"out": destination}
+        if drv.builder in (BUILTIN_STACK, BUILTIN_PROFILE):
+            return combine(self.layout, drv, os.path.join(work, "out"))
         name = drv.name
 
         def on_log(text: str) -> None:

@@ -53,6 +53,13 @@ class StoreError(LatticeError):
     """The store or its database is in a state that prevents the operation. Phase 3."""
 
 
+class ActivationFailed(LatticeError):
+    """A profile, slot or kernel module could not be changed (section 13). Phase 4.
+
+    Whatever was changed before the failure has been put back.
+    """
+
+
 class SubstitutionFailed(LatticeError):
     """A cached path was missing, unsigned or did not match its hashes (section 14). Phase 5."""
 

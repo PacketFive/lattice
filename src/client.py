@@ -37,19 +37,22 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from .derivation import Derivation
 from .errors import ProtocolError, SettingsError
 from .events import EVENTS, EventHandler, emit
-from .models import BuildResult, Evaluation, GCResult, Generation, parse
+from .models import BuildResult, Evaluation, GCResult, Generation, SlotState, parse
 from .protocol import (
     EVENT_METHOD,
     INFO_PATH,
     JSON,
     NDJSON,
     RPC_PATH,
+    DeleteGenerationsParams,
     DerivationParams,
     ErrorObject,
     EvaluateSourceParams,
     NoParams,
     PathParams,
+    ProfileParams,
     PushParams,
+    RollbackParams,
     RootNameParams,
     RootParams,
     ServerInfo,
@@ -65,6 +68,8 @@ DEFAULT_URL = f"unix://{DEFAULT_SOCKET}"
 
 _BACKEND_STATUSES = TypeAdapter(tuple[BackendStatus, ...])
 _ROOTS = TypeAdapter(tuple[GCRootInfo, ...])
+_GENERATIONS = TypeAdapter(tuple[Generation, ...])
+_SLOTS = TypeAdapter(tuple[SlotState, ...])
 
 
 @runtime_checkable
@@ -125,6 +130,22 @@ class LatticeAPI(Protocol):
 
     def switch(self, profile: str, drv: Derivation) -> Generation:
         """Make ``drv`` the current generation of ``profile``."""
+        ...
+
+    def rollback(self, profile: str, generation: int | None = None) -> Generation:
+        """Make an existing generation of ``profile`` current again."""
+        ...
+
+    def generations(self, profile: str) -> tuple[Generation, ...]:
+        """Return every generation of ``profile``."""
+        ...
+
+    def delete_generations(self, profile: str, keep: int) -> tuple[Generation, ...]:
+        """Delete all but the newest ``keep`` generations and the current one."""
+        ...
+
+    def slots(self) -> tuple[SlotState, ...]:
+        """Return the active and wanted stack of every slot."""
         ...
 
     def push(self, paths: Iterable[str], cache: str) -> None:
@@ -349,16 +370,39 @@ class Client:
 
     def roots(self) -> tuple[GCRootInfo, ...]:
         """Return every root of the daemon's store."""
-        value = self._call("roots", NoParams())
+        return self._tuple(_ROOTS, self._call("roots", NoParams()), "roots")
+
+    @staticmethod
+    def _tuple[T](adapter: TypeAdapter[tuple[T, ...]], value: object, what: str) -> tuple[T, ...]:
         try:
-            return _ROOTS.validate_json(json.dumps(value))
+            return adapter.validate_json(json.dumps(value))
         except ValidationError as error:
-            raise ProtocolError(f"invalid roots from the daemon: {error}") from error
+            raise ProtocolError(f"invalid {what} from the daemon: {error}") from error
 
     def switch(self, profile: str, drv: Derivation) -> Generation:
         """Have the daemon make ``drv`` the current generation of ``profile``."""
         params = SwitchParams(profile=profile, derivation=drv)
         return self._result(Generation, self._call("switch", params))
+
+    def rollback(self, profile: str, generation: int | None = None) -> Generation:
+        """Have the daemon make an existing generation of ``profile`` current again."""
+        params = RollbackParams(profile=profile, generation=generation)
+        return self._result(Generation, self._call("rollback", params))
+
+    def generations(self, profile: str) -> tuple[Generation, ...]:
+        """Return every generation of ``profile`` in the daemon's store."""
+        value = self._call("generations", ProfileParams(profile=profile))
+        return self._tuple(_GENERATIONS, value, "generations")
+
+    def delete_generations(self, profile: str, keep: int) -> tuple[Generation, ...]:
+        """Have the daemon delete all but the newest ``keep`` generations and the current one."""
+        params = DeleteGenerationsParams(profile=profile, keep=keep)
+        value = self._call("delete_generations", params)
+        return self._tuple(_GENERATIONS, value, "generations")
+
+    def slots(self) -> tuple[SlotState, ...]:
+        """Return the slots of the daemon's machine."""
+        return self._tuple(_SLOTS, self._call("slots", NoParams()), "slots")
 
     def push(self, paths: Iterable[str], cache: str) -> None:
         """Have the daemon push ``paths`` to ``cache``. Needs the admin role."""

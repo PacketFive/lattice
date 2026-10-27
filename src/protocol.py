@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, NoReturn
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from . import errors
 from .derivation import Derivation
@@ -67,6 +67,7 @@ ERROR_CODES: dict[type[LatticeError], tuple[int, int]] = {
     errors.StoreError: (-32013, 409),
     errors.SubstitutionFailed: (-32014, 502),
     errors.SettingsError: (-32015, 400),
+    errors.ActivationFailed: (-32016, 409),
 }
 _ERROR_TYPES: dict[str, type[LatticeError]] = {cls.__name__: cls for cls in ERROR_CODES}
 
@@ -151,6 +152,26 @@ class SwitchParams(Model):
 
     profile: str
     derivation: Derivation
+
+
+class ProfileParams(Model):
+    """Parameters of ``generations``."""
+
+    profile: str
+
+
+class RollbackParams(Model):
+    """Parameters of ``rollback``. ``generation`` None means the previous one."""
+
+    profile: str
+    generation: int | None = Field(default=None, ge=1)
+
+
+class DeleteGenerationsParams(Model):
+    """Parameters of ``delete_generations``."""
+
+    profile: str
+    keep: int = Field(ge=0)
 
 
 class PushParams(Model):

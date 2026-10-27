@@ -8,23 +8,26 @@ transport.py reads requests, establishes the Identity and writes replies.
 
 Permissions:
 
-==================  ======  ==========================================
-Method              Role    Further rule
-==================  ======  ==========================================
-``evaluate_source`` user
-``build``           user
-``check``           user
-``plan``            user
-``path_info``       user
-``verify``          user
-``roots``           user
-``add_root``        user    A user may only add or remove roots named
-``remove_root``     user    ``per-user/<name>`` or below it; admins any.
-``switch``          user    A user may only switch ``per-user/<name>``
-                            and profiles below it; admins any profile.
-``gc``              admin
-``push``            admin
-==================  ======  ==========================================
+======================  ======  ============================================
+Method                  Role    Further rule
+======================  ======  ============================================
+``evaluate_source``     user
+``build``               user
+``check``               user
+``plan``                user
+``path_info``           user
+``verify``              user
+``roots``               user
+``add_root``            user    A user may only add or remove roots named
+``remove_root``         user    ``per-user/<name>`` or below it; admins any.
+``generations``         user
+``slots``               user
+``switch``              user    A user may only switch, roll back or delete
+``rollback``            user    generations of ``per-user/<name>`` and
+``delete_generations``  user    profiles below it; admins any profile.
+``gc``                  admin
+``push``                admin
+======================  ======  ============================================
 """
 
 from __future__ import annotations
@@ -46,12 +49,15 @@ from .protocol import (
     INVALID_REQUEST,
     METHOD_NOT_FOUND,
     PARSE_ERROR,
+    DeleteGenerationsParams,
     DerivationParams,
     EvaluateSourceParams,
     NoParams,
     PathParams,
+    ProfileParams,
     PushParams,
     Request,
+    RollbackParams,
     RootNameParams,
     RootParams,
     RPCError,
@@ -89,6 +95,16 @@ METHODS: dict[str, Method] = {
     "add_root": Method(RootParams, Role.USER, lambda api, p: api.add_root(p.name, p.path)),
     "remove_root": Method(RootNameParams, Role.USER, lambda api, p: api.remove_root(p.name)),
     "switch": Method(SwitchParams, Role.USER, lambda api, p: api.switch(p.profile, p.derivation)),
+    "rollback": Method(
+        RollbackParams, Role.USER, lambda api, p: api.rollback(p.profile, p.generation)
+    ),
+    "generations": Method(ProfileParams, Role.USER, lambda api, p: api.generations(p.profile)),
+    "delete_generations": Method(
+        DeleteGenerationsParams,
+        Role.USER,
+        lambda api, p: api.delete_generations(p.profile, p.keep),
+    ),
+    "slots": Method(NoParams, Role.USER, lambda api, p: api.slots()),
     "sandbox_config": Method(
         DerivationParams, Role.USER, lambda api, p: api.sandbox_config(p.derivation)
     ),
@@ -117,8 +133,10 @@ def authorize(identity: Identity, name: str, params: BaseModel) -> None:
     method = METHODS[name]
     if method.role is Role.ADMIN and identity.role is not Role.ADMIN:
         raise PermissionDenied(f"{name} needs the admin role")
-    if isinstance(params, SwitchParams) and not may_switch(identity, params.profile):
-        raise PermissionDenied(f"{identity.name} may not switch profile {params.profile!r}")
+    if isinstance(
+        params, SwitchParams | RollbackParams | DeleteGenerationsParams
+    ) and not may_switch(identity, params.profile):
+        raise PermissionDenied(f"{identity.name} may not change profile {params.profile!r}")
     if isinstance(params, RootParams | RootNameParams) and not may_switch(identity, params.name):
         raise PermissionDenied(f"{identity.name} may not change root {params.name!r}")
 

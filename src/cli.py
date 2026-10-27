@@ -14,7 +14,13 @@ The subcommands are::
     lattice [--daemon | --remote URL] add-root NAME PATH
     lattice [--daemon | --remote URL] remove-root NAME
     lattice [--daemon | --remote URL] gc
+    lattice [--daemon | --remote URL] switch [--profile P] FILE.pyb [NAME]
+    lattice [--daemon | --remote URL] rollback [--profile P] [GENERATION]
+    lattice [--daemon | --remote URL] generations [--profile P]
+    lattice [--daemon | --remote URL] delete-generations [--profile P] --keep N
+    lattice [--daemon | --remote URL] slots
     lattice [--daemon | --remote URL] backend-status
+    lattice activate-boot
     lattice daemon
 
 ``eval`` evaluates the file and prints every top-level derivation with its
@@ -28,11 +34,21 @@ sandbox that would build it. ``path-info`` prints what the store database
 records about PATH, and ``verify`` hashes PATH again and exits with 1 if
 it changed. ``roots``, ``add-root`` and ``remove-root`` list and change
 the roots collection keeps, and ``gc`` collects garbage.
+
+``switch`` builds the derivation and makes it the next generation of
+profile P, ``system`` by default, and ``rollback`` makes an earlier
+generation current again (RFC 0001 section 13). ``generations`` lists the
+generations of P, marking the current one, and ``delete-generations``
+deletes all but the newest N and the current one. ``slots`` prints the
+active and wanted stack of each slot. ``activate-boot`` loads the kernel
+modules and creates the slots of the current system generation; it runs
+at boot and always uses the library, never a daemon.
+
 ``backend-status`` prints whether each sandbox backend can run. ``daemon``
 runs the daemon of RFC 0001 section 6.2 until interrupted. Later phases
-add ``switch``, ``push`` and ``materialise``.
+add ``push`` and ``materialise``.
 
-Build progress and logs go to stderr.
+Build progress, logs and activation steps go to stderr.
 
 Every subcommand calls one method of a LatticeAPI and only formats its
 result, so the command and the library always behave the same way. The
@@ -56,7 +72,16 @@ from .api import Lattice
 from .client import DEFAULT_URL, Client, LatticeAPI
 from .derivation import Derivation, canonical_json
 from .errors import LatticeError
-from .events import BuildLog, BuildStarted, Event
+from .events import (
+    ActivationDeferred,
+    BuildLog,
+    BuildStarted,
+    Event,
+    KernelModuleLoaded,
+    KernelModuleUnloaded,
+    SlotChanged,
+)
+from .models import Generation, SlotState
 from .settings import DEFAULT_SETTINGS_PATH, Settings
 from .transport import Daemon
 
@@ -133,6 +158,25 @@ def build_parser() -> argparse.ArgumentParser:
     remove_root.set_defaults(handler=cmd_remove_root)
     gc = commands.add_parser("gc", help="remove store paths that nothing keeps")
     gc.set_defaults(handler=cmd_gc)
+    switch = commands.add_parser("switch", help="build a derivation and make it current")
+    _profile_argument(switch)
+    _derivation_arguments(switch)
+    switch.set_defaults(handler=cmd_switch)
+    rollback = commands.add_parser("rollback", help="make an earlier generation current")
+    _profile_argument(rollback)
+    rollback.add_argument("generation", nargs="?", type=int, help="generation number")
+    rollback.set_defaults(handler=cmd_rollback)
+    generations = commands.add_parser("generations", help="list the generations of a profile")
+    _profile_argument(generations)
+    generations.set_defaults(handler=cmd_generations)
+    delete = commands.add_parser("delete-generations", help="delete old generations")
+    _profile_argument(delete)
+    delete.add_argument("--keep", type=int, required=True, metavar="N", help="newest to keep")
+    delete.set_defaults(handler=cmd_delete_generations)
+    slots = commands.add_parser("slots", help="show the active and wanted stack of each slot")
+    slots.set_defaults(handler=cmd_slots)
+    boot = commands.add_parser("activate-boot", help="load modules and create slots at boot")
+    boot.set_defaults(handler=cmd_activate_boot)
     status = commands.add_parser("backend-status", help="show which sandbox backends can run")
     status.set_defaults(handler=cmd_backend_status)
     daemon = commands.add_parser("daemon", help="run the daemon")
@@ -145,13 +189,28 @@ def _derivation_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("name", nargs="?", help="derivation of the file")
 
 
+def _profile_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--profile", default="system", metavar="P", help="profile (system)")
+
+
 def progress(event: Event) -> None:
-    """Print build starts and build logs to stderr."""
+    """Print build starts, build logs and activation steps to stderr."""
+    line = None
     if isinstance(event, BuildStarted):
-        print(f"building {event.name} ({event.store_path})", file=sys.stderr, flush=True)
+        line = f"building {event.name} ({event.store_path})"
     elif isinstance(event, BuildLog):
         sys.stderr.write(event.text)
         sys.stderr.flush()
+    elif isinstance(event, ActivationDeferred):
+        line = f"slot {event.slot} changes at the next boot: {event.reason}"
+    elif isinstance(event, SlotChanged):
+        line = f"slot {event.slot}: {event.new}" if event.new else f"slot {event.slot}: removed"
+    elif isinstance(event, KernelModuleLoaded):
+        line = f"loaded kernel module {event.name}"
+    elif isinstance(event, KernelModuleUnloaded):
+        line = f"unloaded kernel module {event.name}"
+    if line is not None:
+        print(line, file=sys.stderr, flush=True)
 
 
 def make_api(args: argparse.Namespace) -> LatticeAPI:
@@ -291,6 +350,63 @@ def cmd_gc(args: argparse.Namespace) -> int:
     for path in result.removed:
         print(path)
     print(f"removed {len(result.removed)} store paths, freed {result.freed_bytes} bytes")
+    return 0
+
+
+def _print_generation(generation: Generation) -> None:
+    mark = " (current)" if generation.current else ""
+    print(f"{generation.number} {generation.store_path}{mark}")
+
+
+def cmd_switch(args: argparse.Namespace) -> int:
+    """Build derivation ``args.name`` of ``args.file`` and make it current. Return 0."""
+    api = make_api(args)
+    _print_generation(api.switch(args.profile, select(api, args.file, args.name)))
+    return 0
+
+
+def cmd_rollback(args: argparse.Namespace) -> int:
+    """Make generation ``args.generation``, or the previous one, current. Return 0."""
+    _print_generation(make_api(args).rollback(args.profile, args.generation))
+    return 0
+
+
+def cmd_generations(args: argparse.Namespace) -> int:
+    """Print each generation as ``<number> <store path>``, marking the current one. Return 0."""
+    for generation in make_api(args).generations(args.profile):
+        _print_generation(generation)
+    return 0
+
+
+def cmd_delete_generations(args: argparse.Namespace) -> int:
+    """Delete old generations and print each one deleted. Return 0."""
+    for generation in make_api(args).delete_generations(args.profile, args.keep):
+        _print_generation(generation)
+    return 0
+
+
+def _print_slots(api_slots: tuple[SlotState, ...]) -> None:
+    for state in api_slots:
+        line = f"{state.slot}: active {state.active or 'none'}"
+        if state.wanted != state.active:
+            line += f", next boot {state.wanted or 'none'}"
+        print(line)
+
+
+def cmd_slots(args: argparse.Namespace) -> int:
+    """Print each slot with its active stack, and its wanted stack if that differs. Return 0."""
+    _print_slots(make_api(args).slots())
+    return 0
+
+
+def cmd_activate_boot(args: argparse.Namespace) -> int:
+    """Run Lattice.activate_boot and print the slots. Return 0.
+
+    The library is always used, since boot runs before the daemon starts.
+    """
+    if args.daemon or args.remote is not None or args.ca or args.cert or args.key:
+        raise UsageError("lattice activate-boot takes no --daemon, --remote or TLS options")
+    _print_slots(Lattice(load_settings(args.settings), on_event=progress).activate_boot())
     return 0
 
 

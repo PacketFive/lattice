@@ -8,8 +8,7 @@ that only configures logging sees the same steps.
 
 Events are immutable Pydantic models. The ``type`` field names the event,
 so the daemon can send events to a client as JSON and the client can
-rebuild the same objects. Later phases add events for switching and
-substitution.
+rebuild the same objects. Phase 5 adds events for substitution.
 """
 
 from __future__ import annotations
@@ -79,6 +78,47 @@ class CollectionFinished(Event):
     freed_bytes: int
 
 
+class ProfileSwitched(Event):
+    """A profile now points at another generation (section 13.1)."""
+
+    type: Literal["profile_switched"] = "profile_switched"
+    profile: str
+    number: int
+    store_path: str
+
+
+class ActivationDeferred(Event):
+    """A slot cannot change now and will change at the next boot (section 13.3)."""
+
+    type: Literal["activation_deferred"] = "activation_deferred"
+    slot: str
+    reason: str
+
+
+class SlotChanged(Event):
+    """A slot symlink now points at another stack, or was created or removed."""
+
+    type: Literal["slot_changed"] = "slot_changed"
+    slot: str
+    old: str | None
+    new: str | None
+
+
+class KernelModuleLoaded(Event):
+    """A kernel module was loaded from ``file``."""
+
+    type: Literal["kernel_module_loaded"] = "kernel_module_loaded"
+    name: str
+    file: str
+
+
+class KernelModuleUnloaded(Event):
+    """A kernel module was unloaded."""
+
+    type: Literal["kernel_module_unloaded"] = "kernel_module_unloaded"
+    name: str
+
+
 EventUnion = (
     EvaluationStarted
     | EvaluationFinished
@@ -86,6 +126,11 @@ EventUnion = (
     | BuildLog
     | BuildFinished
     | CollectionFinished
+    | ProfileSwitched
+    | ActivationDeferred
+    | SlotChanged
+    | KernelModuleLoaded
+    | KernelModuleUnloaded
 )
 AnyEvent = Annotated[EventUnion, Field(discriminator="type")]
 EVENTS: TypeAdapter[EventUnion] = TypeAdapter(AnyEvent)
