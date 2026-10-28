@@ -87,8 +87,12 @@ def test_internal_errors_are_hidden(unix_daemon: Daemon) -> None:
     assert "secret" not in str(info.value)
 
 
-def test_push_without_result(unix_daemon: Daemon) -> None:
-    assert local(unix_daemon).push(["/lattice/store/a-x"], "https://cache") is None
+def test_cache_methods(unix_daemon: Daemon) -> None:
+    result = local(unix_daemon).push(["/lattice/store/a-x"], "https://cache")
+    assert result.pushed == ("/lattice/store/a-x",)
+    assert result.cache == "https://cache"
+    fetched = local(unix_daemon).substitute("/lattice/store/a-x", shallow=True)
+    assert fetched.substituted == ("/lattice/store/a-x",)
 
 
 def test_sandbox_methods(unix_daemon: Daemon) -> None:

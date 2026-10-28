@@ -56,7 +56,7 @@ class _Redirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-_OPENER = urllib.request.build_opener(_Redirects())
+OPENER = urllib.request.build_opener(_Redirects())
 
 
 def fetch(drv: Derivation, destination: str) -> FetchResult:
@@ -76,7 +76,7 @@ def fetch(drv: Derivation, destination: str) -> FetchResult:
     fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC, 0o644)
     try:
         try:
-            with _OPENER.open(url, timeout=TIMEOUT) as response:
+            with OPENER.open(url, timeout=TIMEOUT) as response:
                 while chunk := response.read(_CHUNK):
                     digest.update(chunk)
                     size += len(chunk)

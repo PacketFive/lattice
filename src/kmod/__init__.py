@@ -8,6 +8,7 @@ Module                  Contents
                         order in which a set of modules loads
 ``system.py``           The KernelModules protocol and its Linux
                         implementation
+``syscalls.py``         The module system calls, through ctypes
 ======================  ===================================================
 """
 

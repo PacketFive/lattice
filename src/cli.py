@@ -20,6 +20,10 @@ The subcommands are::
     lattice [--daemon | --remote URL] delete-generations [--profile P] --keep N
     lattice [--daemon | --remote URL] slots
     lattice [--daemon | --remote URL] backend-status
+    lattice [--daemon | --remote URL] substitute [--shallow] PATH
+    lattice [--daemon | --remote URL] materialise PATH
+    lattice [--daemon | --remote URL] push --to URL PATH...
+    lattice generate-key NAME FILE
     lattice activate-boot
     lattice daemon
 
@@ -45,10 +49,19 @@ modules and creates the slots of the current system generation; it runs
 at boot and always uses the library, never a daemon.
 
 ``backend-status`` prints whether each sandbox backend can run. ``daemon``
-runs the daemon of RFC 0001 section 6.2 until interrupted. Later phases
-add ``push`` and ``materialise``.
+runs the daemon of RFC 0001 section 6.2 until interrupted.
 
-Build progress, logs and activation steps go to stderr.
+``substitute`` fetches PATH and its missing references from the
+configured binary caches and prints each path it registered; with
+``--shallow`` PATH may become a link into a CernVM-FS cache.
+``materialise`` turns a shallow path into a full copy. ``push`` signs and
+publishes each PATH with its closure and provenance to the cache at URL
+and prints each path it published. ``generate-key`` writes a new secret
+signing key called NAME to FILE, readable by its owner only, and prints
+the public key to list in ``trusted_keys``; it always runs locally
+(RFC 0001 section 14).
+
+Build progress, logs, substitutions and activation steps go to stderr.
 
 Every subcommand calls one method of a LatticeAPI and only formats its
 result, so the command and the library always behave the same way. The
@@ -76,10 +89,13 @@ from .events import (
     ActivationDeferred,
     BuildLog,
     BuildStarted,
+    CacheSkipped,
     Event,
     KernelModuleLoaded,
     KernelModuleUnloaded,
+    PathPushed,
     SlotChanged,
+    SubstitutionStarted,
 )
 from .models import Generation, SlotState
 from .settings import DEFAULT_SETTINGS_PATH, Settings
@@ -179,6 +195,21 @@ def build_parser() -> argparse.ArgumentParser:
     boot.set_defaults(handler=cmd_activate_boot)
     status = commands.add_parser("backend-status", help="show which sandbox backends can run")
     status.set_defaults(handler=cmd_backend_status)
+    substitute = commands.add_parser("substitute", help="fetch a store path from the caches")
+    substitute.add_argument("--shallow", action="store_true", help="allow a shallow path")
+    substitute.add_argument("path", help="store path")
+    substitute.set_defaults(handler=cmd_substitute)
+    materialise = commands.add_parser("materialise", help="turn a shallow path into a copy")
+    materialise.add_argument("path", help="store path")
+    materialise.set_defaults(handler=cmd_materialise)
+    push = commands.add_parser("push", help="publish store paths to a binary cache")
+    push.add_argument("--to", required=True, metavar="URL", help="cache to publish to")
+    push.add_argument("paths", nargs="+", metavar="PATH", help="store path")
+    push.set_defaults(handler=cmd_push)
+    key = commands.add_parser("generate-key", help="create a cache signing key")
+    key.add_argument("name", help="key name, for example cache.example.org-1")
+    key.add_argument("file", help="new file for the secret key")
+    key.set_defaults(handler=cmd_generate_key)
     daemon = commands.add_parser("daemon", help="run the daemon")
     daemon.set_defaults(handler=cmd_daemon)
     return parser
@@ -209,6 +240,12 @@ def progress(event: Event) -> None:
         line = f"loaded kernel module {event.name}"
     elif isinstance(event, KernelModuleUnloaded):
         line = f"unloaded kernel module {event.name}"
+    elif isinstance(event, SubstitutionStarted):
+        line = f"fetching {event.path} from {event.cache}"
+    elif isinstance(event, CacheSkipped):
+        line = f"skipped {event.cache}: {event.reason}"
+    elif isinstance(event, PathPushed):
+        line = f"pushed {event.path} to {event.cache}"
     if line is not None:
         print(line, file=sys.stderr, flush=True)
 
@@ -414,6 +451,44 @@ def cmd_backend_status(args: argparse.Namespace) -> int:
     """Print one line per sandbox backend: its name, then available or the reason. Return 0."""
     for status in make_api(args).backend_status():
         print(f"{status.name}: {'available' if status.available else status.reason}")
+    return 0
+
+
+def cmd_substitute(args: argparse.Namespace) -> int:
+    """Fetch ``args.path`` and print each path registered. Return 0."""
+    for path in make_api(args).substitute(args.path, args.shallow).substituted:
+        print(path)
+    return 0
+
+
+def cmd_materialise(args: argparse.Namespace) -> int:
+    """Turn the shallow path ``args.path`` into a full copy. Return 0."""
+    info = make_api(args).materialise(args.path)
+    print(f"{info.path}: {info.location}")
+    return 0
+
+
+def cmd_push(args: argparse.Namespace) -> int:
+    """Publish ``args.paths`` to ``args.to`` and print each path published. Return 0."""
+    result = make_api(args).push(args.paths, args.to)
+    for path in result.pushed:
+        print(path)
+    print(f"pushed {len(result.pushed)} store paths, {len(result.skipped)} already in the cache")
+    return 0
+
+
+def cmd_generate_key(args: argparse.Namespace) -> int:
+    """Write a new secret key to ``args.file`` and print its public key. Return 0."""
+    if args.daemon or args.remote is not None or args.ca or args.cert or args.key:
+        raise UsageError("lattice generate-key always runs locally")
+    from .cache.signing import generate_key, write_secret_key
+
+    try:
+        key = generate_key(args.name)
+    except ValueError as error:
+        raise UsageError(str(error)) from None
+    write_secret_key(args.file, key)
+    print(key.public())
     return 0
 
 

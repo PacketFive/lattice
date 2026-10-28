@@ -1,16 +1,17 @@
 # SPDX-License-Identifier: GPL-2.0
-"""Sandbox description tests: RFC 0001 sections 8 and 9.2 to 9.7.
+"""How Lattice describes a build to Cloche: RFC 0001 sections 8 and 9.2 to 9.7.
 
-Nothing here creates a namespace; test_sandbox_build.py does.
+Nothing here creates a namespace; test_sandbox_build.py does. Cloche's
+own tests cover the sandbox rules that do not involve derivations.
 """
 
 import json
 import os
-import stat
 import subprocess
 from pathlib import Path
 
 import pytest
+from cloche import FIXED_VARIABLES, Limits, Outcome, RunFailed, SandboxUnavailable
 from pybonsai import FrozenMap
 
 from lattice import (
@@ -24,10 +25,16 @@ from lattice import (
     cli,
 )
 from lattice.derivation import STORE_DIR, output_path
-from lattice.sandbox import SandboxSpec, probe, select_backend
-from lattice.sandbox.environment import FIXED_VARIABLES, build_environment
-from lattice.sandbox.namespaces import copy_out
-from lattice.sandbox.spec import input_closure, make_spec, oci_config
+from lattice.sandbox import (
+    BuildRequest,
+    SandboxSpec,
+    build_command,
+    input_closure,
+    make_spec,
+    oci_config,
+    run_build,
+    select_backend,
+)
 
 TOOLS = Derivation(name="tools", builder="/bin/sh", outputs=("out", "dev"))
 
@@ -70,7 +77,7 @@ def test_sandbox_settings(tmp_path: Path) -> None:
 
 def test_environment() -> None:
     drv = hello(greeting="hi")
-    env = build_environment(drv)
+    env = spec_of(drv).env
     assert list(env) == sorted(env)
     assert env["greeting"] == "hi"
     assert env["tools"] == TOOLS.store_path
@@ -83,15 +90,29 @@ def test_environment() -> None:
 @pytest.mark.parametrize(
     ("env", "message"),
     [
-        ({"PATH": "/bin"}, "sandbox fixes"),
-        ({"out": "/x"}, "names an output"),
+        ({"PATH": "/bin"}, "hello: env sets PATH, which the sandbox fixes"),
+        ({"out": "/x"}, "hello: env sets out, which names an output"),
         ({"a=b": "x"}, "cannot be passed"),
         ({"a": "x\0y"}, "cannot be passed"),
     ],
 )
 def test_environment_rejects(env: dict[str, str], message: str) -> None:
     with pytest.raises(BuildFailed, match=message):
-        build_environment(hello(**env))
+        spec_of(hello(**env))
+
+
+def test_command() -> None:
+    drv = hello()
+    command = build_command(drv, host_store="/srv/store")
+    assert command.program == drv.builder
+    assert command.directories == (STORE_DIR,)
+    assert command.outputs == {"out": drv.store_path}
+    sources = {b.destination: b.source for b in command.binds}
+    assert sources == {
+        path: f"/srv/store/{path.rpartition('/')[2]}" for path in TOOLS.output_paths.values()
+    }
+    only = build_command(drv, inputs=(TOOLS.store_path,))
+    assert [b.destination for b in only.binds] == [TOOLS.store_path]
 
 
 def test_input_closure_is_transitive() -> None:
@@ -106,7 +127,7 @@ def test_input_closure_is_transitive() -> None:
 def test_spec() -> None:
     drv = hello()
     spec = spec_of(drv)
-    assert spec.inputs == tuple(TOOLS.output_paths.values())
+    assert spec.program == drv.builder
     assert spec.outputs == {"out": drv.store_path}
     assert spec.cwd == "/build"
     assert spec.hostname == "localhost"
@@ -114,6 +135,7 @@ def test_spec() -> None:
     kinds = {m.destination: (m.kind, m.read_only) for m in spec.mounts}
     assert kinds[STORE_DIR] == ("tmpfs", False)
     assert kinds[TOOLS.store_path] == ("bind", True)
+    assert kinds[f"{TOOLS.store_path}-dev"] == ("bind", True)
     assert kinds["/proc"] == ("proc", False)
     assert kinds["/dev/null"] == ("bind", False)
     assert "/etc" not in kinds
@@ -174,81 +196,8 @@ def test_oci_config() -> None:
     }
 
 
-def test_copy_out(tmp_path: Path) -> None:
-    root = tmp_path / "root"
-    built = root / "lattice/store/abc-x"
-    (built / "bin").mkdir(parents=True)
-    (built / "bin/tool").write_text("tool", encoding="utf-8")
-    (built / "bin/tool").chmod(0o4755)
-    (built / "link").symlink_to("/etc/passwd")
-    (built / "share").mkdir(mode=0o555)
-    destination = tmp_path / "out/abc-x"
-    destination.parent.mkdir()
-    copy_out(str(root), "/lattice/store/abc-x", str(destination))
-    assert (destination / "bin/tool").read_text(encoding="utf-8") == "tool"
-    assert stat.S_IMODE((destination / "bin/tool").stat().st_mode) == 0o755
-    assert os.readlink(destination / "link") == "/etc/passwd"
-    assert stat.S_IMODE((destination / "share").stat().st_mode) == 0o555
-    (destination / "share").chmod(0o755)
-
-
-def test_copy_out_does_not_follow_links(tmp_path: Path) -> None:
-    root = tmp_path / "root"
-    (root / "lattice").mkdir(parents=True)
-    secret = tmp_path / "secret"
-    secret.mkdir()
-    (root / "lattice/store").symlink_to(secret)
-    (secret / "abc-x").write_text("host file", encoding="utf-8")
-    with pytest.raises(OSError):
-        copy_out(str(root), "/lattice/store/abc-x", str(tmp_path / "copy"))
-    assert not (tmp_path / "copy").exists()
-
-
-def test_copy_out_rejects_special_files(tmp_path: Path) -> None:
-    store = tmp_path / "root/lattice/store"
-    (store / "abc-x").mkdir(parents=True)
-    os.mkfifo(store / "abc-x/pipe")
-    (tmp_path / "out").mkdir()
-    with pytest.raises(ValueError, match="pipe is not a regular file"):
-        copy_out(str(tmp_path / "root"), "/lattice/store/abc-x", str(tmp_path / "out/abc-x"))
-
-
-def test_copy_out_missing(tmp_path: Path) -> None:
-    (tmp_path / "root/lattice/store").mkdir(parents=True)
-    with pytest.raises(FileNotFoundError):
-        copy_out(str(tmp_path / "root"), "/lattice/store/abc-x", str(tmp_path / "abc-x"))
-
-
 def failed_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess([], 1, "", "Traceback\nPermissionError: denied\n")
-
-
-def test_probe_explains_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    sysctl = tmp_path / "restrict"
-    sysctl.write_text("1\n", encoding="ascii")
-    monkeypatch.setattr(subprocess, "run", failed_run)
-    monkeypatch.setattr(
-        probe, "_SYSCTLS", ((str(tmp_path / "none"), "0", "no"), (str(sysctl), "1", "restricted"))
-    )
-    status = probe.namespaces_status()
-    assert not status.available
-    assert (
-        status.reason
-        == "unprivileged user namespaces do not work: PermissionError: denied (restricted)"
-    )
-
-
-def test_probe_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    def slow(*args: object, **kwargs: object) -> None:
-        raise subprocess.TimeoutExpired("python", 30)
-
-    monkeypatch.setattr(subprocess, "run", slow)
-    assert "timed out" in probe.namespaces_status().reason
-
-
-def test_probe_unsupported_machine(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(probe.libc, "machine", lambda: "riscv64")
-    assert probe.namespaces_status().reason == "riscv64 is not supported"
 
 
 def test_backend_status_lists_every_backend(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -256,6 +205,38 @@ def test_backend_status_lists_every_backend(monkeypatch: pytest.MonkeyPatch) -> 
     statuses = Lattice().backend_status()
     assert [s.name for s in statuses] == ["namespaces", "oci", "microvm"]
     assert statuses[1].reason == "not available in this release"
+
+
+def test_errors_become_lattice_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def failing(error: Exception) -> object:
+        def run(*args: object, **kwargs: object) -> Outcome:
+            raise error
+
+        return run
+
+    request = BuildRequest(derivation=hello(), work_dir=str(tmp_path))
+    monkeypatch.setattr("cloche.run", failing(RunFailed("hello: the program exited")))
+    with pytest.raises(BuildFailed, match="hello: the program exited"):
+        run_build(request)
+    monkeypatch.setattr("cloche.run", failing(SandboxUnavailable("no backend")))
+    with pytest.raises(BackendUnavailable, match="no backend"):
+        run_build(request)
+
+
+def test_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def run(command: object, work: str, limits: object, **kwargs: object) -> Outcome:
+        seen.update(command=command, limits=limits)
+        return Outcome(outputs={"out": f"{work}/out/out"}, log=f"{work}/run.log", seconds=1.5)
+
+    monkeypatch.setattr("cloche.run", run)
+    sandbox = SandboxSettings(timeout=9, max_open_files=64)
+    outcome = run_build(BuildRequest(derivation=hello(), work_dir=str(tmp_path), sandbox=sandbox))
+    assert outcome.outputs == {"out": f"{tmp_path}/out/out"}
+    assert outcome.seconds == 1.5
+    assert seen["command"] == build_command(hello())
+    assert seen["limits"] == Limits(timeout=9, max_open_files=64)
 
 
 def test_select_backend_never_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:

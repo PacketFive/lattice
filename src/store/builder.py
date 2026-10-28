@@ -2,8 +2,11 @@
 """Realising derivations in dependency order (RFC 0001 sections 10.1 and 10.2).
 
 plan lists the derivations a build needs, inputs first, and says for
-each one whether its outputs are already registered, will be downloaded
-or will be built in the sandbox. Builder.build carries out a plan with
+each one whether its outputs are already registered, will be fetched
+from a binary cache, will be downloaded or will be built in the sandbox.
+The plan is made from the requested derivation down: the inputs of a
+derivation that comes from a cache are not needed and are left out
+(section 14.1). Builder.build carries out a plan with
 up to ``max_jobs`` steps at once; a step starts when every derivation it
 names in ``env`` has finished. The first failure stops new steps from
 starting, waits for the running ones and is raised.
@@ -15,20 +18,22 @@ derivation, so two processes never build the same derivation at once.
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import sqlite3
 import tempfile
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
 from ..derivation import BUILTIN_FETCH_URL, BUILTIN_PROFILE, BUILTIN_STACK, Derivation
 from ..errors import BuildFailed, StoreError
-from ..events import BuildFinished, BuildLog, BuildStarted, EventHandler, emit
+from ..events import BuildFinished, BuildLog, BuildStarted, Event, EventHandler, emit
 from ..models import BuildResult, Model
-from ..sandbox.runner import BuildRequest, run_build
-from ..settings import Settings
+from ..sandbox import BuildRequest, run_build
+from ..settings import Settings, ShallowRules
 from . import database, lock
 from .combine import combine
 from .fetch import fetch
@@ -37,9 +42,10 @@ from .realise import realise, remove_tree, scan
 from .verify import diff_trees
 
 if TYPE_CHECKING:
+    from ..cache.substitute import Substituter
     from ..sandbox import Backend
 
-Action = Literal["present", "fetch", "build"]
+Action = Literal["present", "substitute", "fetch", "build"]
 
 
 class PlannedStep(Model):
@@ -97,6 +103,37 @@ def _action(drv: Derivation, present: bool) -> Action:
     return "fetch" if drv.builder == BUILTIN_FETCH_URL else "build"
 
 
+def shallow_paths(steps: tuple[Derivation, ...], rules: ShallowRules) -> frozenset[str]:
+    """Return the output paths of ``steps`` that may be shallow paths (section 14.6).
+
+    A derivation whose name matches a pattern in ``rules.packages`` may
+    be shallow, and so may a stack for a slot in ``rules.slots`` with its
+    contents. Kernel modules named by a stack never are.
+    """
+    allowed: set[str] = set()
+    local: set[str] = set()
+    for drv in steps:
+        if any(fnmatch.fnmatchcase(drv.name, pattern) for pattern in rules.packages):
+            allowed.update(drv.output_paths.values())
+        if drv.builder != BUILTIN_STACK:
+            continue
+        shallow_slot = drv.env.get("slot") in rules.slots
+        if shallow_slot:
+            allowed.update(drv.output_paths.values())
+        for key, value in drv.env.items():
+            if not isinstance(value, Derivation):
+                continue
+            if str(key).startswith("kernel_module_"):
+                local.update(value.output_paths.values())
+            elif shallow_slot and str(key).startswith("content_"):
+                allowed.update(value.output_paths.values())
+    return frozenset(allowed - local)
+
+
+def _timestamp() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 class Builder:
     """Builds derivations into the store of ``layout`` (section 10).
 
@@ -118,10 +155,52 @@ class Builder:
         self.backend = backend
         self.on_event = on_event
         self._emit_lock = threading.Lock()
+        self._substituter: Substituter | None = None
+        self._shallow: frozenset[str] = frozenset()
 
-    def _emit(self, event: BuildStarted | BuildLog | BuildFinished) -> None:
+    def _emit(self, event: Event) -> None:
         with self._emit_lock:
             emit(self.on_event, event)
+
+    def substituter(self) -> Substituter | None:
+        """Return the Substituter of the configured caches, or None if there are none."""
+        if self._substituter is None and self.settings.substituters:
+            from ..cache.substitute import Substituter
+
+            self._substituter = Substituter(self.layout, self.settings, on_event=self._emit)
+        return self._substituter
+
+    def _available(self, paths: set[str]) -> bool:
+        substituter = self.substituter()
+        return substituter is not None and all(substituter.query(p) is not None for p in paths)
+
+    def _schedule(self, drv: Derivation) -> tuple[tuple[Derivation, ...], dict[str, Action]]:
+        """Return the steps building ``drv`` needs, inputs first, and the action of each."""
+        steps = ordered(drv)
+        present: frozenset[str] = frozenset()
+        if self.layout.exists():
+            connection = database.connect(self.layout)
+            try:
+                present = database.registered(
+                    connection, (p for step in steps for p in step.output_paths.values())
+                )
+            finally:
+                connection.close()
+        needed = {drv.hash}
+        actions: dict[str, Action] = {}
+        for step in reversed(steps):
+            if step.hash not in needed:
+                continue
+            outputs = set(step.output_paths.values())
+            if outputs <= present:
+                actions[step.hash] = "present"
+            elif self._available(outputs - present):
+                actions[step.hash] = "substitute"
+                continue
+            else:
+                actions[step.hash] = _action(step, False)
+            needed.update(dep.hash for dep in dependencies(step))
+        return tuple(step for step in steps if step.hash in needed), actions
 
     def _backend(self) -> Backend:
         if self.backend is None:
@@ -133,25 +212,17 @@ class Builder:
     def plan(self, drv: Derivation) -> BuildPlan:
         """List the steps that building ``drv`` takes. Nothing is created.
 
-        Without a store every step is a download or a build.
+        Without a store every step is fetched from a cache, downloaded or
+        built. The configured caches are asked which paths they have.
         """
-        steps = ordered(drv)
-        present: frozenset[str] = frozenset()
-        if self.layout.exists():
-            connection = database.connect(self.layout)
-            try:
-                present = database.registered(
-                    connection, (p for step in steps for p in step.output_paths.values())
-                )
-            finally:
-                connection.close()
+        steps, actions = self._schedule(drv)
         return BuildPlan(
             steps=tuple(
                 PlannedStep(
                     name=step.name,
                     drv_hash=step.hash,
                     outputs=step.output_paths,
-                    action=_action(step, set(step.output_paths.values()) <= present),
+                    action=actions[step.hash],
                 )
                 for step in steps
             )
@@ -161,13 +232,17 @@ class Builder:
         """Realise ``drv`` and everything it depends on, then return its result.
 
         Raises BuildFailed if a step fails, BackendUnavailable if the
-        sandbox cannot run here and StoreError if the store is broken.
+        sandbox cannot run here, SubstitutionFailed if a path the plan
+        takes from a cache cannot be fetched and StoreError if the store
+        is broken.
         """
         started = time.monotonic()
         database.connect(self.layout, create=True).close()
         built: dict[str, bool] = {}
         with lock.shared(self.layout):
-            self._run(ordered(drv), built)
+            steps, actions = self._schedule(drv)
+            self._shallow = shallow_paths(ordered(drv), self.settings.cache.shallow)
+            self._run(steps, built, actions)
         return BuildResult(
             derivation=drv,
             store_path=drv.store_path,
@@ -176,8 +251,15 @@ class Builder:
             seconds=time.monotonic() - started,
         )
 
-    def _run(self, steps: tuple[Derivation, ...], built: dict[str, bool]) -> None:
+    def _run(
+        self,
+        steps: tuple[Derivation, ...],
+        built: dict[str, bool],
+        actions: dict[str, Action] | None = None,
+    ) -> None:
         waiting = list(steps)
+        scheduled = {step.hash for step in steps}
+        actions = actions or {}
         running: dict[Future[bool], Derivation] = {}
         failure: BaseException | None = None
         with ThreadPoolExecutor(
@@ -185,9 +267,10 @@ class Builder:
         ) as pool:
             while waiting or running:
                 if failure is None:
-                    for step in [s for s in waiting if _ready(s, built)]:
+                    for step in [s for s in waiting if _ready(s, built, scheduled)]:
                         waiting.remove(step)
-                        running[pool.submit(self._step, step)] = step
+                        action = actions.get(step.hash)
+                        running[pool.submit(self._step, step, action)] = step
                 if not running:
                     break
                 done, _ = wait(running, return_when=FIRST_COMPLETED)
@@ -201,8 +284,8 @@ class Builder:
         if failure is not None:
             raise failure
 
-    def _step(self, drv: Derivation) -> bool:
-        """Realise the outputs of ``drv``; return False if they were already registered."""
+    def _step(self, drv: Derivation, action: Action | None = None) -> bool:
+        """Realise the outputs of ``drv``; return False unless they were built here."""
         with lock.derivation(self.layout, drv.hash):
             connection = database.connect(self.layout)
             try:
@@ -210,12 +293,22 @@ class Builder:
                     drv.output_paths.values()
                 ):
                     return False
+                if action == "substitute":
+                    substituter = self.substituter()
+                    assert substituter is not None  # noqa: S101 - the plan used it
+                    for path in drv.output_paths.values():
+                        substituter.substitute(
+                            connection, path, shallow=self._shallow, held=(drv.hash,)
+                        )
+                    return False
                 inputs = self._inputs(connection, drv)
                 started = time.monotonic()
+                started_at = _timestamp()
                 self._emit(BuildStarted(name=drv.name, store_path=drv.store_path))
                 with self._work_dir(drv) as work:
                     outputs = self._produce(drv, work, inputs)
-                    realise(self.layout, connection, drv, outputs, inputs)
+                    entries = realise(self.layout, connection, drv, outputs, inputs)
+                self._record(connection, drv, entries, inputs, started_at)
                 self._emit(
                     BuildFinished(
                         name=drv.name,
@@ -227,6 +320,30 @@ class Builder:
                 return True
             finally:
                 connection.close()
+
+    def _record(
+        self,
+        connection: sqlite3.Connection,
+        drv: Derivation,
+        entries: tuple[database.Registration, ...],
+        inputs: tuple[str, ...],
+        started_at: str,
+    ) -> None:
+        """Record how the outputs of ``drv`` were built, for their provenance (section 14.9)."""
+        backend = "builtin" if drv.builder.startswith("builtin:") else self._backend().name
+        hashes = []
+        for path in inputs:
+            info = database.path_info(connection, path)
+            if info is not None:
+                hashes.append((path, info.content_sha256))
+        record = database.BuildRecord(
+            backend=backend,
+            started_at=started_at,
+            finished_at=_timestamp(),
+            inputs=tuple(hashes),
+        )
+        for entry in entries:
+            database.record_build(connection, entry.path, record)
 
     def _inputs(self, connection: sqlite3.Connection, drv: Derivation) -> tuple[str, ...]:
         direct = direct_inputs(drv)
@@ -261,6 +378,11 @@ class Builder:
                 host_store=self.layout.store,
                 sandbox=self.settings.sandbox,
                 inputs=inputs,
+                sources={
+                    path: os.readlink(physical)
+                    for path in inputs
+                    if os.path.islink(physical := self.layout.physical(path))
+                },
             ),
             self._backend(),
             on_log,
@@ -314,8 +436,8 @@ class Builder:
         )
 
 
-def _ready(drv: Derivation, finished: dict[str, bool]) -> bool:
-    return all(dep.hash in finished for dep in dependencies(drv))
+def _ready(drv: Derivation, finished: dict[str, bool], scheduled: set[str]) -> bool:
+    return all(dep.hash in finished for dep in dependencies(drv) if dep.hash in scheduled)
 
 
 class _WorkDir:

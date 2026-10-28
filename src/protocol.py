@@ -129,7 +129,7 @@ class DerivationParams(Model):
 
 
 class PathParams(Model):
-    """Parameters of ``path_info`` and ``verify``."""
+    """Parameters of ``path_info``, ``verify`` and ``materialise``."""
 
     path: str
 
@@ -172,6 +172,13 @@ class DeleteGenerationsParams(Model):
 
     profile: str
     keep: int = Field(ge=0)
+
+
+class SubstituteParams(Model):
+    """Parameters of ``substitute``."""
+
+    path: str
+    shallow: bool = False
 
 
 class PushParams(Model):

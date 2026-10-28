@@ -1,25 +1,26 @@
 # SPDX-License-Identifier: GPL-2.0
-"""Builds in the namespace backend: RFC 0001 sections 9.2 to 9.5.
+"""Builds in the namespace backend through Cloche: RFC 0001 sections 9.2 to 9.5.
 
+These tests check what Lattice adds to Cloche: the derivation's
+environment, its inputs bound from the store, and Lattice's errors.
+Cloche's own tests cover isolation, hardening and copying outputs out.
 The builder is sandbox_probe.c, linked statically so it needs nothing
 from the sandbox. The tests are skipped where unprivileged user
 namespaces or static linking are not available.
 """
 
-import errno
-import os
 import shutil
 import stat
 import subprocess
 from pathlib import Path
 
 import pytest
+from cloche import FIXED_VARIABLES
+from cloche.probe import namespaces_status
 from pybonsai import FrozenMap
 
 from lattice import BuildFailed, Derivation, SandboxSettings
 from lattice.sandbox import BuildOutcome, BuildRequest, run_build
-from lattice.sandbox.environment import FIXED_VARIABLES
-from lattice.sandbox.probe import namespaces_status
 
 pytestmark = pytest.mark.requires_userns
 
@@ -100,68 +101,10 @@ def test_environment(store: Path, tmp_path: Path) -> None:
     assert stat.S_IMODE((output / "file").stat().st_mode) == 0o644
 
 
-def test_isolation(store: Path, tmp_path: Path) -> None:
-    values = report(build(store, tmp_path, "isolation", TOOLS.store_path))
-    assert values["etc"] == str(errno.ENOENT)
-    assert values["route"] == str(errno.ENETUNREACH)
-    assert values["loopback"] == "0"
-    assert values["write_input"] == str(errno.EROFS)
-    assert values["umount_input"] == str(errno.EPERM)
-    assert values["remount_input"] == str(errno.EPERM)
-    assert values["mount"] == str(errno.EPERM)
-    assert values["null"] == "0"
-    assert values["shm"] == "0"
-
-
-def test_hardening(store: Path, tmp_path: Path) -> None:
-    outcome = build(store, tmp_path, "harden")
-    values = report(outcome)
-    for name in ("chmod_setuid", "chmod_setgid", "setxattr", "keyctl", "io_uring"):
-        assert values[name] == str(errno.EPERM), name
-    assert values["chmod_plain"] == "0"
-    assert values["create_setuid"] == "0"
-    output = Path(outcome.outputs["out"])
-    assert stat.S_IMODE((output / "suid").stat().st_mode) == 0o755
-    assert stat.S_IMODE((output / "file").stat().st_mode) == 0o700
-
-
 def test_failing_builder(store: Path, tmp_path: Path) -> None:
     with pytest.raises(BuildFailed, match="exited with status 2") as info:
         build(store, tmp_path, "fail")
     assert "failing on purpose" in str(info.value)
-
-
-def test_missing_output(store: Path, tmp_path: Path) -> None:
-    with pytest.raises(BuildFailed, match="did not create output out"):
-        build(store, tmp_path, "nothing")
-
-
-def test_symlink_output_is_not_followed(store: Path, tmp_path: Path) -> None:
-    output = Path(build(store, tmp_path, "escape").outputs["out"])
-    assert output.is_symlink()
-    assert os.readlink(output) == "/etc/passwd"
-
-
-def test_symlink_input_is_not_mounted(store: Path, tmp_path: Path) -> None:
-    secret = tmp_path / "secret"
-    secret.mkdir()
-    (secret / "key").write_text("private\n", encoding="utf-8")
-    linked = Derivation(name="linked", builder="/bin/sh", args=("-c", str(secret)))
-    link = store / Path(linked.store_path).name
-    link.symlink_to(secret)
-    (tmp_path / "work").mkdir()
-    try:
-        outcome = build(
-            store, tmp_path / "work", "open", f"{linked.store_path}/key", inputs={"linked": linked}
-        )
-    finally:
-        link.unlink()
-    assert report(outcome)["open"] == str(errno.ENOENT)
-
-
-def test_special_file_fails(store: Path, tmp_path: Path) -> None:
-    with pytest.raises(BuildFailed, match="pipe is not a regular file"):
-        build(store, tmp_path, "fifo")
 
 
 def test_timeout_kills_the_build(store: Path, tmp_path: Path) -> None:

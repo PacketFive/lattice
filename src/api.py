@@ -29,6 +29,7 @@ import os
 import sqlite3
 import time
 from collections.abc import Iterable
+from platform import machine
 from typing import TYPE_CHECKING
 
 import pybonsai
@@ -39,10 +40,17 @@ from .derivation import BUILTIN_PROFILE, Derivation
 from .errors import ActivationFailed, EvaluationFailed, StoreError
 from .events import EvaluationFinished, EvaluationStarted, EventHandler, ProfileSwitched, emit
 from .kmod import KernelModules, LinuxModules
-from .models import BuildResult, Evaluation, GCResult, Generation, SlotState
+from .models import (
+    BuildResult,
+    Evaluation,
+    GCResult,
+    Generation,
+    PushResult,
+    SlotState,
+    SubstitutionResult,
+)
 from .sandbox import BackendStatus, OciConfig, make_spec, oci_config
 from .sandbox import backend_status as probe_backends
-from .sandbox.libc import machine
 from .settings import Settings
 from .stdlib import build_host
 from .store import (
@@ -185,14 +193,18 @@ class Lattice:
     def verify(self, path: str) -> VerifyResult:
         """Hash the contents of ``path`` again and compare with the database (section 11).
 
-        Phase 3. Raises StoreError if ``path`` is not registered or its
-        files are missing.
+        Phase 3. A shallow path is read through its link, which fetches
+        every file from CernVM-FS (section 14.6). Raises StoreError if
+        ``path`` is not registered or its files are missing.
         """
         self.path_info(path)
         with lock.shared(self.layout):
             info = self.path_info(path)
+            physical = self.layout.physical(path)
+            if info.location == "shallow" and os.path.islink(physical):
+                physical = os.readlink(physical)
             try:
-                digest, size = content_hash(self.layout.physical(path))
+                digest, size = content_hash(physical)
             except FileNotFoundError:
                 raise StoreError(f"{path} is registered but its files are missing") from None
         return VerifyResult(
@@ -399,6 +411,43 @@ class Lattice:
             profiles.boot(self.layout, self.kernel_modules, {}, self.on_event)
         return profiles.states(self.layout)
 
-    def push(self, paths: Iterable[str], cache: str) -> None:
-        """Sign and upload store paths and their provenance to ``cache``. Phase 5."""
-        raise NotImplementedError
+    def substitute(self, path: str, shallow: bool = False) -> SubstitutionResult:
+        """Fetch ``path`` and its missing references from the caches (section 14.1). Phase 5.
+
+        If ``shallow`` and the cache is a CernVM-FS repository, ``path``
+        becomes a link into it; its references are full copies. Raises
+        SubstitutionFailed if no trusted cache has a valid entry for a
+        path or a fetched path does not match its signed entry.
+        """
+        from .cache.substitute import substitute
+
+        check_store_path(path)
+        return substitute(self.layout, self.settings, path, shallow=shallow, on_event=self.on_event)
+
+    def materialise(self, path: str) -> StorePathInfo:
+        """Turn the shallow path ``path`` into a full copy (section 14.6). Phase 5.
+
+        A process that opens ``path`` while its link is replaced gets
+        ENOENT, so materialise a stack while its slot is not active.
+        Raises StoreError if ``path`` is not registered or its copy does
+        not match the registered hash.
+        """
+        from .cache.substitute import materialise
+
+        check_store_path(path)
+        return materialise(self.layout, path)
+
+    def push(self, paths: Iterable[str], cache: str) -> PushResult:
+        """Sign and publish store paths, their closures and provenance to ``cache``. Phase 5.
+
+        Paths the cache already has are skipped. Raises SettingsError if
+        no secret key is set, StoreError if a path was not built on this
+        machine or has changed since it was registered, and
+        SubstitutionFailed if the cache cannot be written (section 14.4).
+        """
+        from .cache.push import push
+
+        paths = tuple(paths)
+        for path in paths:
+            check_store_path(path)
+        return push(self.layout, self.settings, paths, cache, on_event=self.on_event)

@@ -12,8 +12,12 @@ program only has to catch LatticeError.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import os
+import re
 import tomllib
+import urllib.parse
 from typing import TYPE_CHECKING, Any, Literal, Self, get_args
 
 from pydantic import Field, ValidationError, model_validator
@@ -149,6 +153,86 @@ class StoreSettings(_SettingsModel):
         return self
 
 
+KEY_NAME = re.compile(r"[A-Za-z0-9._+-]+")
+_CVMFS_REPO = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]*")
+CACHE_SCHEMES = ("https", "http", "file", "cvmfs")
+
+
+def check_public_key(text: str) -> str:
+    """Return ``text`` if it is ``<name>:<base64 of 32 bytes>``, an Ed25519 public key.
+
+    Raises ValueError otherwise. The name says which key signed an entry.
+    """
+    name, colon, encoded = text.partition(":")
+    try:
+        key = base64.b64decode(encoded, validate=True)
+    except binascii.Error:
+        key = b""
+    if not colon or not KEY_NAME.fullmatch(name) or len(key) != 32:
+        raise ValueError(f"{text!r} is not a key of the form <name>:<base64 of 32 bytes>")
+    return text
+
+
+def check_cache_url(url: str) -> str:
+    """Return ``url`` if it names a cache Lattice can read, and raise ValueError if not.
+
+    A cache is ``https://``, ``http://``, ``file:///<directory>`` or
+    ``cvmfs://<repository>`` (section 14).
+    """
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme not in CACHE_SCHEMES or parts.query or parts.fragment:
+        raise ValueError(f"{url!r} is not an https, http, file or cvmfs cache URL")
+    if parts.scheme == "cvmfs":
+        if not _CVMFS_REPO.fullmatch(parts.netloc) or parts.path not in ("", "/"):
+            raise ValueError(f"{url!r} must be cvmfs://<repository>")
+    elif parts.scheme == "file":
+        if parts.netloc or not os.path.isabs(parts.path):
+            raise ValueError(f"{url!r} must be file:///<absolute directory>")
+    elif not parts.netloc:
+        raise ValueError(f"{url!r} has no host")
+    return url
+
+
+class ShallowRules(_SettingsModel):
+    """Which store paths may be shallow paths into CernVM-FS (section 14.6).
+
+    ``slots`` names slots whose stack contents may be shallow and
+    ``packages`` holds glob patterns matched against derivation names.
+    Kernel modules are always local copies, whatever these say.
+    """
+
+    slots: tuple[str, ...] = ()
+    packages: tuple[str, ...] = ()
+
+
+class CacheSettings(_SettingsModel):
+    """How this machine publishes to and reads from caches (section 14).
+
+    ``secret_key_file`` holds the Ed25519 key ``lattice push`` signs with,
+    written by ``lattice generate-key``. ``builder_id`` names this machine
+    in provenance; empty means the host name. ``cvmfs_root`` is where
+    CernVM-FS repositories are mounted and ``cvmfs_server`` the program
+    that publishes to one. ``shallow`` says which paths may be shallow.
+    """
+
+    secret_key_file: str | None = None
+    builder_id: str = ""
+    cvmfs_root: str = "/cvmfs"
+    cvmfs_server: str = "cvmfs_server"
+    shallow: ShallowRules = ShallowRules()
+
+    @model_validator(mode="after")
+    def _check_paths(self) -> Self:
+        if (
+            not os.path.isabs(self.cvmfs_root)
+            or os.path.normpath(self.cvmfs_root) != self.cvmfs_root
+        ):
+            raise ValueError(
+                f"cvmfs_root must be a normalised absolute path, not {self.cvmfs_root!r}"
+            )
+        return self
+
+
 class Settings(_SettingsModel):
     """What one machine uses to build and fetch store paths.
 
@@ -158,7 +242,8 @@ class Settings(_SettingsModel):
     (section 14.3). ``require_provenance`` rejects substituted paths without
     valid signed provenance (section 14.9). ``daemon`` is read only by
     ``lattice daemon``. ``sandbox`` holds the limits of every build and
-    ``store`` the location of the store.
+    ``store`` the location of the store and ``cache`` how caches are
+    published and read.
     """
 
     sandbox_backend: SandboxBackend = "namespaces"
@@ -168,6 +253,15 @@ class Settings(_SettingsModel):
     sandbox: SandboxSettings = SandboxSettings()
     store: StoreSettings = StoreSettings()
     daemon: DaemonSettings = DaemonSettings()
+    cache: CacheSettings = CacheSettings()
+
+    @model_validator(mode="after")
+    def _check_caches(self) -> Self:
+        for url in self.substituters:
+            check_cache_url(url)
+        for key in self.trusted_keys:
+            check_public_key(key)
+        return self
 
     @classmethod
     def load(cls, path: str | os.PathLike[str]) -> Settings:
@@ -175,7 +269,8 @@ class Settings(_SettingsModel):
 
         Top-level keys are the fields of Settings, the ``[sandbox]`` table
         holds SandboxSettings, the ``[store]`` table StoreSettings and the
-        ``[daemon]`` table DaemonSettings.
+        ``[daemon]`` table DaemonSettings and the ``[cache]`` table
+        CacheSettings, with ``[cache.shallow]`` for ShallowRules.
         Grants are arrays of tables, written ``[[daemon.clients]]`` and
         ``[[daemon.tokens]]``. A key the model
         does not know is an error. A file that cannot be read, is not valid

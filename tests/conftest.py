@@ -36,8 +36,10 @@ from lattice import (
     Generation,
     LatticeAPI,
     ProfileSwitched,
+    PushResult,
     SandboxSettings,
     SlotState,
+    SubstitutionResult,
 )
 from lattice.kmod import LoadedModule, read_info
 from lattice.procscan import ProcessUse
@@ -127,8 +129,14 @@ class FakeAPI:
     def slots(self) -> tuple[SlotState, ...]:
         return (SlotState(slot="nvidia", active="/lattice/store/a-s", wanted="/lattice/store/b-s"),)
 
-    def push(self, paths: Iterable[str], cache: str) -> None:
-        return None
+    def substitute(self, path: str, shallow: bool = False) -> SubstitutionResult:
+        return SubstitutionResult(path=path, substituted=(path,) if shallow else (), seconds=0.0)
+
+    def materialise(self, path: str) -> StorePathInfo:
+        raise NotImplementedError
+
+    def push(self, paths: Iterable[str], cache: str) -> PushResult:
+        return PushResult(cache=cache, pushed=tuple(paths), skipped=(), seconds=0.0)
 
 
 @pytest.fixture
@@ -144,14 +152,14 @@ def report(**fields):
 report(kind="started", pid=os.getpid())
 print("building", plan["name"], flush=True)
 if plan["args"][:1] == ["fail"]:
-    report(kind="failed", error="the builder exited with status 2")
+    report(kind="failed", error="the program exited with status 2")
     sys.exit(0)
 for name in plan["outputs"]:
     out = os.path.join(plan["out_dir"], name)
     os.mkdir(out)
     with open(os.path.join(out, "file"), "w") as file:
         file.write("\\n".join(plan["args"]) + plan["extra"])
-report(kind="built")
+report(kind="finished")
 """
 
 
@@ -179,7 +187,7 @@ class StoreBackend:
             "name": job.spec.name,
             "args": list(job.spec.args),
             "out_dir": job.out_dir,
-            "outputs": [path.rpartition("/")[2] for path in job.spec.outputs.values()],
+            "outputs": list(job.spec.outputs),
             "extra": self.extra,
         }
         return subprocess.Popen(

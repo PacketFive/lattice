@@ -14,6 +14,11 @@ and then:
 
 A crash part way leaves a path either registered with all its files or
 unregistered, which the next collection removes.
+
+A shallow path is a symlink into a CernVM-FS repository (section 14.6).
+Collecting it deletes only the symlink, and a process that uses it shows
+the repository path in its maps, which the scan maps back to the store
+path through the directories the shallow symlinks point at.
 """
 
 from __future__ import annotations
@@ -31,7 +36,13 @@ from .realise import remove_tree
 
 
 def _disk_usage(path: str) -> int:
-    """Return the bytes of the files under ``path``, not following links."""
+    """Return the bytes of the files under ``path``, not following links.
+
+    A shallow path counts as its symlink alone, since its files are not
+    in the store.
+    """
+    if os.path.islink(path):
+        return os.lstat(path).st_size
     total = 0
     for top, dirs, files in os.walk(path):
         for name in (*dirs, *files):
@@ -40,6 +51,16 @@ def _disk_usage(path: str) -> int:
             except OSError:
                 continue
     return total + os.lstat(path).st_size
+
+
+def _shallow_dirs(layout: StoreLayout) -> tuple[str, ...]:
+    """Return the directories the shallow paths in the store link into."""
+    found: set[str] = set()
+    for name in os.listdir(layout.store):
+        link = os.path.join(layout.store, name)
+        if os.path.islink(link):
+            found.add(os.path.dirname(os.readlink(link)))
+    return tuple(sorted(found))
 
 
 def _referrers_first(dead: set[str], edges: dict[str, frozenset[str]]) -> list[str]:
@@ -62,7 +83,7 @@ def collect(layout: StoreLayout, on_event: EventHandler | None = None) -> GCResu
     connection = database.connect(layout, create=True)
     try:
         with lock.exclusive(layout):
-            in_use = {use.path for use in procscan.scan(layout.store)}
+            in_use = {use.path for use in procscan.scan(layout.store, extra=_shallow_dirs(layout))}
             in_use.update(layout.active_slots().values())
             live = database.live_paths(connection, in_use)
             dead = set(database.all_paths(connection)) - live

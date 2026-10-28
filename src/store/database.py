@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0
-"""The dependency database (RFC 0001 sections 11, 12 and 14.8).
+"""The dependency database (RFC 0001 sections 11, 12, 14.8 and 14.9).
 
 The SQL is plain ``sqlite3``. Rows leave this module as the Pydantic
 models StorePathInfo and GCRootInfo, and enter it as Registration, so the
@@ -9,11 +9,13 @@ Every connection enables foreign keys and write-ahead logging, so readers
 are not blocked while a path is registered. ``references`` is an SQL
 keyword and is quoted in every statement. The schema version is kept in
 ``PRAGMA user_version`` and MIGRATIONS brings an older database up to
-date when it is opened.
+date when it is opened. Schema 2 adds ``builds``, which records how
+each path built on this machine was built, for its provenance.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from collections.abc import Iterable, Iterator
@@ -54,6 +56,15 @@ MIGRATIONS: tuple[tuple[str, ...], ...] = (
         )""",
         "CREATE INDEX gc_roots_path ON gc_roots (path)",
     ),
+    (
+        """CREATE TABLE builds (
+            path INTEGER PRIMARY KEY REFERENCES store_paths (id) ON DELETE CASCADE,
+            backend TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT NOT NULL,
+            inputs TEXT NOT NULL
+        )""",
+    ),
 )
 """The statements that create schema version ``index + 1`` from the one before."""
 
@@ -87,6 +98,20 @@ class StorePathInfo(Model):
     location: Location
     source: str
     references: tuple[str, ...]
+
+
+class BuildRecord(Model):
+    """How a path was built here: the backend, its times and its inputs.
+
+    ``inputs`` holds each input store path with the SHA-256 of its
+    contents. The times are RFC 3339 in UTC. This is what the provenance
+    of the path states (section 14.9).
+    """
+
+    backend: str
+    started_at: str
+    finished_at: str
+    inputs: tuple[tuple[str, str], ...] = ()
 
 
 class GCRootInfo(Model):
@@ -244,6 +269,51 @@ def path_info(connection: sqlite3.Connection, path: str) -> StorePathInfo | None
         source=row[6],
         references=tuple(ref for (ref,) in references),
     )
+
+
+def record_build(connection: sqlite3.Connection, path: str, record: BuildRecord) -> None:
+    """Record how the registered ``path`` was built, replacing any older record."""
+    with transaction(connection):
+        ids = _ids(connection, (path,))
+        if not ids:
+            raise StoreError(f"{path} is not registered")
+        connection.execute(
+            "INSERT OR REPLACE INTO builds (path, backend, started_at, finished_at, inputs)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (
+                ids[path],
+                record.backend,
+                record.started_at,
+                record.finished_at,
+                json.dumps([list(item) for item in record.inputs]),
+            ),
+        )
+
+
+def build_record(connection: sqlite3.Connection, path: str) -> BuildRecord | None:
+    """Return how ``path`` was built here, or None if it was not built here."""
+    row = connection.execute(
+        "SELECT b.backend, b.started_at, b.finished_at, b.inputs FROM builds b"
+        " JOIN store_paths s ON s.id = b.path WHERE s.path = ?",
+        (path,),
+    ).fetchone()
+    if row is None:
+        return None
+    inputs = tuple((str(item[0]), str(item[1])) for item in json.loads(row[3]))
+    return BuildRecord(backend=row[0], started_at=row[1], finished_at=row[2], inputs=inputs)
+
+
+def set_location(
+    connection: sqlite3.Connection, path: str, location: Location, content_sha256: str, size: int
+) -> None:
+    """Record that ``path`` is now at ``location`` with the given contents."""
+    with transaction(connection):
+        cursor = connection.execute(
+            "UPDATE store_paths SET location = ?, content_sha256 = ?, size = ? WHERE path = ?",
+            (location, content_sha256, size, path),
+        )
+        if cursor.rowcount == 0:
+            raise StoreError(f"{path} is not registered")
 
 
 def _with_temp_paths(connection: sqlite3.Connection, paths: Iterable[str]) -> None:

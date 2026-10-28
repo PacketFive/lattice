@@ -75,6 +75,27 @@ class GCResult(Model):
     seconds: float
 
 
+class SubstitutionResult(Model):
+    """The paths a substitution registered, references first, and the time taken.
+
+    ``substituted`` is empty if ``path`` and its references were already
+    registered (RFC 0001 section 14.1).
+    """
+
+    path: str
+    substituted: tuple[str, ...]
+    seconds: float
+
+
+class PushResult(Model):
+    """The paths a push published and those the cache already had, references first."""
+
+    cache: str
+    pushed: tuple[str, ...]
+    skipped: tuple[str, ...]
+    seconds: float
+
+
 class Generation(Model):
     """One generation of a profile (section 13.1).
 

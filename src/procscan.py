@@ -58,13 +58,20 @@ def _targets(proc: str) -> list[str]:
     return found
 
 
-def scan(host_store: str, proc_root: str = "/proc") -> tuple[ProcessUse, ...]:
+def scan(
+    host_store: str, proc_root: str = "/proc", extra: tuple[str, ...] = ()
+) -> tuple[ProcessUse, ...]:
     """Return each store path a process uses, sorted by pid and path.
 
     ``host_store`` is the directory that holds the store on this machine;
-    paths under it and under ``/lattice/store`` are both counted.
+    paths under it and under ``/lattice/store`` are both counted. Paths
+    under each directory in ``extra`` count as the store path of the same
+    name, as for the CernVM-FS directories that shallow paths link to
+    (RFC 0001 section 14.6).
     """
-    prefixes = tuple(dict.fromkeys((os.path.normpath(host_store), STORE_DIR)))
+    prefixes = tuple(
+        dict.fromkeys((os.path.normpath(host_store), STORE_DIR, *map(os.path.normpath, extra)))
+    )
     uses: set[tuple[int, str]] = set()
     try:
         entries = os.listdir(proc_root)

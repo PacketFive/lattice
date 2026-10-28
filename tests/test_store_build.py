@@ -11,10 +11,10 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from cloche.probe import namespaces_status
 from pybonsai import FrozenMap
 
 from lattice import BuildFailed, Derivation, Lattice, Settings
-from lattice.sandbox.probe import namespaces_status
 from lattice.store import database
 from lattice.store.realise import realise
 

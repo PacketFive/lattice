@@ -20,10 +20,11 @@ is removed only after one minor release in which using it raises a
 DeprecationWarning. Modules and names not listed here are internal.
 
 Phase 1 provides derivations, the standard library and evaluation,
-Phase 2 the build sandbox (``lattice.sandbox``), Phase 3 the store, the
-dependency database and the garbage collector (``lattice.store``), and
-Phase 4 profiles, slots and kernel modules (``lattice.profiles`` and
-``lattice.kmod``). Phase 5 adds binary caches.
+Phase 2 the build sandbox (``lattice.sandbox``, built on the Cloche
+package), Phase 3 the store, the dependency database and the garbage
+collector (``lattice.store``), and Phase 4 profiles, slots and kernel
+modules (``lattice.profiles`` and ``lattice.kmod``). Phase 5 adds binary
+caches.
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ from .events import (
     BuildFinished,
     BuildLog,
     BuildStarted,
+    CacheSkipped,
     CollectionFinished,
     EvaluationFinished,
     EvaluationStarted,
@@ -56,20 +58,35 @@ from .events import (
     EventHandler,
     KernelModuleLoaded,
     KernelModuleUnloaded,
+    PathPushed,
     ProfileSwitched,
     SlotChanged,
+    SubstitutionFinished,
+    SubstitutionStarted,
 )
 from .kmod import KernelModules, LinuxModules, LoadedModule, ModuleInfo
-from .models import BuildResult, Evaluation, GCResult, Generation, Identity, Role, SlotState
+from .models import (
+    BuildResult,
+    Evaluation,
+    GCResult,
+    Generation,
+    Identity,
+    PushResult,
+    Role,
+    SlotState,
+    SubstitutionResult,
+)
 from .sandbox import BackendStatus, OciConfig
 from .settings import (
     DEFAULT_SOCKET,
     SANDBOX_BACKENDS,
+    CacheSettings,
     ClientGrant,
     DaemonSettings,
     SandboxBackend,
     SandboxSettings,
     Settings,
+    ShallowRules,
     StoreSettings,
     TokenGrant,
 )
@@ -136,4 +153,12 @@ __all__ = [
     "StoreError",
     "SubstitutionFailed",
     "TokenGrant",
+    "CacheSettings",
+    "CacheSkipped",
+    "PathPushed",
+    "PushResult",
+    "ShallowRules",
+    "SubstitutionFinished",
+    "SubstitutionResult",
+    "SubstitutionStarted",
 ]

@@ -17,6 +17,7 @@ Method                  Role    Further rule
 ``plan``                user
 ``path_info``           user
 ``verify``              user
+``substitute``          user
 ``roots``               user
 ``add_root``            user    A user may only add or remove roots named
 ``remove_root``         user    ``per-user/<name>`` or below it; admins any.
@@ -26,6 +27,7 @@ Method                  Role    Further rule
 ``rollback``            user    generations of ``per-user/<name>`` and
 ``delete_generations``  user    profiles below it; admins any profile.
 ``gc``                  admin
+``materialise``         admin
 ``push``                admin
 ======================  ======  ============================================
 """
@@ -61,6 +63,7 @@ from .protocol import (
     RootNameParams,
     RootParams,
     RPCError,
+    SubstituteParams,
     SwitchParams,
     error_object,
     failure,
@@ -110,6 +113,10 @@ METHODS: dict[str, Method] = {
     ),
     "backend_status": Method(NoParams, Role.USER, lambda api, p: api.backend_status()),
     "gc": Method(NoParams, Role.ADMIN, lambda api, p: api.gc()),
+    "substitute": Method(
+        SubstituteParams, Role.USER, lambda api, p: api.substitute(p.path, p.shallow)
+    ),
+    "materialise": Method(PathParams, Role.ADMIN, lambda api, p: api.materialise(p.path)),
     "push": Method(PushParams, Role.ADMIN, lambda api, p: api.push(p.paths, p.cache)),
 }
 

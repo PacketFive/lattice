@@ -8,7 +8,7 @@ that only configures logging sees the same steps.
 
 Events are immutable Pydantic models. The ``type`` field names the event,
 so the daemon can send events to a client as JSON and the client can
-rebuild the same objects. Phase 5 adds events for substitution.
+rebuild the same objects.
 """
 
 from __future__ import annotations
@@ -119,6 +119,41 @@ class KernelModuleUnloaded(Event):
     name: str
 
 
+class SubstitutionStarted(Event):
+    """A store path is being fetched from the cache ``cache``."""
+
+    type: Literal["substitution_started"] = "substitution_started"
+    path: str
+    cache: str
+
+
+class SubstitutionFinished(Event):
+    """A store path was fetched; ``shallow`` if it is a link into a CernVM-FS cache."""
+
+    type: Literal["substitution_finished"] = "substitution_finished"
+    path: str
+    cache: str
+    shallow: bool
+    seconds: float
+
+
+class CacheSkipped(Event):
+    """The cache ``cache`` was not used for ``path``, for the reason given."""
+
+    type: Literal["cache_skipped"] = "cache_skipped"
+    path: str
+    cache: str
+    reason: str
+
+
+class PathPushed(Event):
+    """A store path was published to the cache ``cache``."""
+
+    type: Literal["path_pushed"] = "path_pushed"
+    path: str
+    cache: str
+
+
 EventUnion = (
     EvaluationStarted
     | EvaluationFinished
@@ -131,6 +166,10 @@ EventUnion = (
     | SlotChanged
     | KernelModuleLoaded
     | KernelModuleUnloaded
+    | SubstitutionStarted
+    | SubstitutionFinished
+    | CacheSkipped
+    | PathPushed
 )
 AnyEvent = Annotated[EventUnion, Field(discriminator="type")]
 EVENTS: TypeAdapter[EventUnion] = TypeAdapter(AnyEvent)

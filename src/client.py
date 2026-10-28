@@ -37,7 +37,16 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from .derivation import Derivation
 from .errors import ProtocolError, SettingsError
 from .events import EVENTS, EventHandler, emit
-from .models import BuildResult, Evaluation, GCResult, Generation, SlotState, parse
+from .models import (
+    BuildResult,
+    Evaluation,
+    GCResult,
+    Generation,
+    PushResult,
+    SlotState,
+    SubstitutionResult,
+    parse,
+)
 from .protocol import (
     EVENT_METHOD,
     INFO_PATH,
@@ -56,6 +65,7 @@ from .protocol import (
     RootNameParams,
     RootParams,
     ServerInfo,
+    SubstituteParams,
     SwitchParams,
     raise_error,
 )
@@ -148,8 +158,16 @@ class LatticeAPI(Protocol):
         """Return the active and wanted stack of every slot."""
         ...
 
-    def push(self, paths: Iterable[str], cache: str) -> None:
-        """Sign and upload store paths and their provenance to ``cache``."""
+    def substitute(self, path: str, shallow: bool = False) -> SubstitutionResult:
+        """Fetch ``path`` and its missing references from the configured caches."""
+        ...
+
+    def materialise(self, path: str) -> StorePathInfo:
+        """Turn the shallow path ``path`` into a full copy."""
+        ...
+
+    def push(self, paths: Iterable[str], cache: str) -> PushResult:
+        """Sign and publish store paths, their closures and provenance to ``cache``."""
         ...
 
 
@@ -404,6 +422,16 @@ class Client:
         """Return the slots of the daemon's machine."""
         return self._tuple(_SLOTS, self._call("slots", NoParams()), "slots")
 
-    def push(self, paths: Iterable[str], cache: str) -> None:
+    def substitute(self, path: str, shallow: bool = False) -> SubstitutionResult:
+        """Have the daemon fetch ``path`` from its caches."""
+        params = SubstituteParams(path=path, shallow=shallow)
+        return self._result(SubstitutionResult, self._call("substitute", params))
+
+    def materialise(self, path: str) -> StorePathInfo:
+        """Have the daemon turn a shallow path into a full copy. Needs the admin role."""
+        return self._result(StorePathInfo, self._call("materialise", PathParams(path=path)))
+
+    def push(self, paths: Iterable[str], cache: str) -> PushResult:
         """Have the daemon push ``paths`` to ``cache``. Needs the admin role."""
-        self._call("push", PushParams(paths=tuple(paths), cache=cache))
+        params = PushParams(paths=tuple(paths), cache=cache)
+        return self._result(PushResult, self._call("push", params))

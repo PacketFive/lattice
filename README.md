@@ -22,9 +22,12 @@ All of these work and are tested, the daemon over a Unix socket and TLS.
 Phase 2: the build sandbox. Each build runs in fresh Linux user, mount,
 network, PID, UTS and IPC namespaces, with no capabilities, no new
 privileges, a seccomp filter and a fixed environment, and sees only its
-declared inputs, read-only. `lattice sandbox-config` prints the sandbox of
-a derivation as an OCI runtime configuration, and `lattice backend-status`
-reports which backends this machine can run.
+declared inputs, read-only. The sandbox itself is
+[Cloche](https://github.com/PacketFive/cloche), a separate package that
+runs any program this way; Lattice turns each derivation into a Cloche
+command. `lattice sandbox-config` prints the sandbox of a derivation as an
+OCI runtime configuration, and `lattice backend-status` reports which
+backends this machine can run.
 
 Phase 3: the store. `lattice build` builds a derivation and its inputs,
 up to `max_jobs` at once, publishes each output atomically and read-only,
@@ -41,14 +44,22 @@ root. `stack` combines packages, kernel modules and device patterns into
 one version of a stack, and the `system` profile assigns one stack to each
 slot. A switch changes the kernel modules of a slot only while their
 devices are closed and the modules are unused, and otherwise defers the
-change to the next boot. The OCI and microVM backends and binary caches
-follow in later phases (see the development plan in the PyrixOS
+change to the next boot.
+
+Phase 5: binary caches. `lattice push` signs store paths built on this
+machine and publishes them, their closures and their SLSA provenance to an
+HTTP cache, a directory or a CernVM-FS repository. A build fetches every
+path a trusted cache holds instead of building it, and checks its
+signature and hashes first. Paths from CernVM-FS can be shallow paths,
+symlinks into `/cvmfs` that are fetched file by file, and `lattice
+materialise` turns one into a full copy. The OCI and microVM backends
+follow in a later phase (see the development plan in the PyrixOS
 repository).
 
 ## Install
 
 ```sh
-pip install --config-settings editable_mode=strict -e '../pybonsai[dev]' -e '.[dev]'
+pip install --config-settings editable_mode=strict -e '../pybonsai[dev]' -e '../cloche[dev]' -e '.[dev]'
 pybootstrap check
 ```
 
@@ -62,7 +73,8 @@ package. Tests import the installed package, so install before running
 them.
 
 Python 3.12 or later is required. The only runtime dependencies are
-PyBonsai and [Pydantic](https://docs.pydantic.dev/) 2. The distribution name is
+PyBonsai, Cloche, [Pydantic](https://docs.pydantic.dev/) 2 and
+[cryptography](https://cryptography.io/) for Ed25519 signatures. The distribution name is
 `pyrixos-lattice`; the import name is `lattice`.
 
 ## Use
@@ -102,6 +114,21 @@ lattice slots                                 # active stack, and the next boot'
 lattice activate-boot                         # run once at boot, before services
 ```
 
+Binary caches:
+
+```sh
+lattice generate-key cache.example.org-1 /etc/lattice/cache.key  # prints the public key
+lattice push --to https://cache.example.org /lattice/store/<hash>-hello
+lattice push --to cvmfs://sw.example.org /lattice/store/<hash>-nvidia-570
+lattice substitute /lattice/store/<hash>-hello     # fetch one path and its references
+lattice substitute --shallow /lattice/store/<hash>-cuda-12.8
+lattice materialise /lattice/store/<hash>-cuda-12.8
+```
+
+A cache URL is `https://`, `http://`, `file:///<directory>` or
+`cvmfs://<repository>`. Pushing to HTTP uses `PUT`, so the server must
+accept uploads from the build machine.
+
 ```python
 # system.pyb
 nvidia_570 = stack(
@@ -129,6 +156,7 @@ the file given with `--settings`. Without a file the defaults apply.
 sandbox_backend = "namespaces"
 substituters = ["https://cache.example.org"]
 trusted_keys = ["cache.example.org-1:..."]
+require_provenance = false   # true rejects paths without signed provenance
 
 [store]
 root = "/lattice"     # store, staging and database live below this
@@ -139,6 +167,16 @@ stacks = "/run/lattice/stacks"  # slot symlinks, this by default
 timeout = 3600
 max_silent_time = 600
 max_open_files = 1024
+
+[cache]
+secret_key_file = "/etc/lattice/cache.key"  # on a machine that pushes
+builder_id = "ci-1"         # names this machine in provenance, host name by default
+cvmfs_root = "/cvmfs"       # where CernVM-FS repositories are mounted
+cvmfs_server = "cvmfs_server"
+
+[cache.shallow]
+slots = ["nvidia"]          # stacks in these slots, and their contents, may be shallow
+packages = ["cuda-*"]       # and so may derivations with these names
 
 [daemon]
 listen = "0.0.0.0:7420"
@@ -236,7 +274,7 @@ until their phase is complete.
 | `transport.py` | `Daemon`: the HTTP server on the Unix socket and TLS, and caller identification |
 | `client.py` | `Client` and the `LatticeAPI` protocol |
 | `cli.py` | The `lattice` command, a wrapper around `Lattice` and `Client` |
-| `sandbox/` | The build sandbox: its description, seccomp filter, environment, namespace backend, build runner and backend probe |
+| `sandbox.py` | Turns a derivation into a Cloche command and runs the build in the sandbox |
 | `store/` | The store: layout, locks, content hashes, reference scanning, the database, publication, downloads, the builder and the garbage collector |
 | `procscan.py` | Finds the store paths that running processes use |
 

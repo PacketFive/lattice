@@ -17,7 +17,7 @@ from .. import procscan
 from ..errors import ActivationFailed
 from ..models import Model
 from ..procscan import ProcessUse
-from ..sandbox import libc
+from . import syscalls
 from .modinfo import read_image
 
 
@@ -93,18 +93,18 @@ class LinuxModules:
             if path.endswith(".ko"):
                 fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
                 try:
-                    libc.finit_module(fd)
+                    syscalls.finit_module(fd)
                 finally:
                     os.close(fd)
             else:
-                libc.init_module(read_image(path))
+                syscalls.init_module(read_image(path))
         except OSError as error:
             raise ActivationFailed(f"cannot load {path}: {error.strerror}") from None
 
     def unload(self, name: str) -> None:
         """Unload ``name`` with delete_module, without waiting for users to go away."""
         try:
-            libc.delete_module(name)
+            syscalls.delete_module(name)
         except OSError as error:
             raise ActivationFailed(f"cannot unload {name}: {error.strerror}") from None
 

@@ -96,9 +96,29 @@ def test_rpc_empty_batch(factory: Factory) -> None:
     assert rpc(Dispatcher(factory), [])["error"]["code"] == -32600
 
 
+def _without_result(factory: Factory) -> Factory:
+    def make(on_event: EventHandler | None) -> LatticeAPI:
+        api = factory(on_event)
+        setattr(api, "push", lambda paths, cache: None)  # noqa: B010 - replaces a method
+        return api
+
+    return make
+
+
 def test_rpc_method_without_result(factory: Factory) -> None:
     request = {"jsonrpc": "2.0", "method": "push", "params": {"paths": [], "cache": "c"}, "id": 1}
-    assert rpc(Dispatcher(factory), request) == {"jsonrpc": "2.0", "result": None, "id": 1}
+    reply = rpc(Dispatcher(_without_result(factory)), request)
+    assert reply == {"jsonrpc": "2.0", "result": None, "id": 1}
+
+
+def test_rpc_cache_methods(factory: Factory) -> None:
+    request = {"jsonrpc": "2.0", "method": "push", "params": {"paths": ["p"], "cache": "c"}}
+    request["id"] = 1
+    assert rpc(Dispatcher(factory), request)["result"]["pushed"] == ["p"]
+    request = {"jsonrpc": "2.0", "method": "substitute", "params": {"path": "p"}, "id": 2}
+    assert rpc(Dispatcher(factory), request)["result"]["substituted"] == []
+    request = {"jsonrpc": "2.0", "method": "materialise", "params": {"path": "p"}, "id": 3}
+    assert rpc(Dispatcher(factory), request)["error"]["code"] == NOT_IMPLEMENTED
 
 
 def test_rpc_internal_error_hides_detail(factory: Factory) -> None:
@@ -113,7 +133,9 @@ def test_rest_status_codes(factory: Factory) -> None:
     d = Dispatcher(factory)
     assert d.handle_rest("gc", b"", ADMIN)[0] == 200
     assert d.handle_rest("gc", b"", ALICE)[0] == 403
-    assert d.handle_rest("push", b'{"paths": [], "cache": "c"}', ADMIN) == (204, None)
+    assert d.handle_rest("push", b'{"paths": [], "cache": "c"}', ALICE)[0] == 403
+    empty = Dispatcher(_without_result(factory))
+    assert empty.handle_rest("push", b'{"paths": [], "cache": "c"}', ADMIN) == (204, None)
     assert d.handle_rest("nope", b"{}", ADMIN)[0] == 404
     assert d.handle_rest("evaluate_source", b"{", ADMIN)[0] == 400
     status, body = d.handle_rest("evaluate_source", b'{"source": "fail"}', ALICE)

@@ -62,6 +62,19 @@ def make_read_only(path: str) -> None:
             os.chmod(entry, stat.S_IMODE(mode) & ~0o222)
 
 
+def copy_tree(source: str, destination: str) -> None:
+    """Copy ``source`` to ``destination`` and give the owner write permission on its directories.
+
+    Store trees are read-only, and a directory must be writable before
+    it can be renamed into the store.
+    """
+    shutil.copytree(source, destination, symlinks=True)
+    for entry in _walk(destination):
+        mode = os.lstat(entry).st_mode
+        if stat.S_ISDIR(mode):
+            os.chmod(entry, stat.S_IMODE(mode) | 0o700)
+
+
 def remove_tree(path: str) -> None:
     """Delete ``path`` and everything under it, restoring write permission first."""
     try:

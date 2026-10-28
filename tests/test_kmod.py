@@ -13,10 +13,9 @@ from pathlib import Path
 import pytest
 
 from lattice import ActivationFailed
-from lattice.kmod import LinuxModules, ModuleInfo, find_modules, load_order, read_info
+from lattice.kmod import LinuxModules, ModuleInfo, find_modules, load_order, read_info, syscalls
 from lattice.kmod.modinfo import parse_info, section
 from lattice.procscan import ProcessUse
-from lattice.sandbox import libc
 
 MakeModule = Callable[..., bytes]
 
@@ -148,7 +147,7 @@ def test_linux_unload_missing_module() -> None:
 
 
 def test_module_system_calls_are_known() -> None:
-    if libc.machine() not in {"x86_64", "aarch64"}:
+    if syscalls.machine() not in {"x86_64", "aarch64"}:
         pytest.skip("system call numbers are only listed for x86_64 and aarch64")
     with pytest.raises(OSError):
-        libc.delete_module("lattice_test_absent")
+        syscalls.delete_module("lattice_test_absent")

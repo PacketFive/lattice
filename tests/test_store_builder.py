@@ -31,6 +31,7 @@ from lattice.store.realise import realise
 
 if TYPE_CHECKING:
     from conftest import StoreBackend
+    from lattice.sandbox import SandboxJob
 
 TOOLS = Derivation(name="tools", builder="/bin/sh")
 SH = f"{TOOLS.store_path}/bin/sh"
@@ -38,6 +39,11 @@ SH = f"{TOOLS.store_path}/bin/sh"
 
 def drv(name: str, *args: str, **inputs: Derivation) -> Derivation:
     return Derivation(name=name, builder=SH, args=args, env=FrozenMap({"tools": TOOLS, **inputs}))
+
+
+def bound(job: SandboxJob) -> dict[str, str | None]:
+    """Return the store paths a build sees, with the host path each is bound from."""
+    return {m.destination: m.source for m in job.spec.mounts if m.kind == "bind" and m.read_only}
 
 
 def register_tools(layout: StoreLayout) -> None:
@@ -114,9 +120,8 @@ def test_build(layout: StoreLayout, store_backend: StoreBackend) -> None:
         f"{a.store_path}/file"
     )
     first, second = store_backend.jobs
-    assert first.spec.inputs == (TOOLS.store_path,)
-    assert set(second.spec.inputs) == {TOOLS.store_path, a.store_path}
-    assert first.host_store == layout.store
+    assert bound(first) == {TOOLS.store_path: layout.physical(TOOLS.store_path)}
+    assert set(bound(second)) == {TOOLS.store_path, a.store_path}
     started = [e.name for e in events if isinstance(e, BuildStarted)]
     finished = [e for e in events if isinstance(e, BuildFinished)]
     assert started == ["a", "b"]
@@ -141,7 +146,7 @@ def test_failure_stops_the_build(layout: StoreLayout, store_backend: StoreBacken
     good = drv("good")
     bad = drv("bad", "fail")
     top = drv("top", good=good, bad=bad)
-    with pytest.raises(BuildFailed, match="bad: the builder exited with status 2"):
+    with pytest.raises(BuildFailed, match="bad: the program exited with status 2"):
         builder(layout, store_backend, jobs=2).build(top)
     assert "top" not in [job.spec.name for job in store_backend.jobs]
     connection = database.connect(layout)
@@ -199,7 +204,7 @@ def test_fetch(layout: StoreLayout, store_backend: StoreBackend, url: str) -> No
     top = drv("top", src=src)
     builder(layout, store_backend).build(top)
     assert Path(layout.physical(src.store_path)).read_bytes() == BODY
-    assert store_backend.jobs[0].spec.inputs == tuple(sorted((TOOLS.store_path, src.store_path)))
+    assert set(bound(store_backend.jobs[0])) == {TOOLS.store_path, src.store_path}
     two = Derivation(
         name="src", builder=BUILTIN_FETCH_URL, env=FrozenMap(env), outputs=("out", "doc")
     )
