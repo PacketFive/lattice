@@ -115,6 +115,39 @@ class DaemonSettings(_SettingsModel):
         return self
 
 
+def _absolute(value: str | None, what: str) -> None:
+    if value is not None and (not os.path.isabs(value) or os.path.normpath(value) != value):
+        raise ValueError(f"{what} must be a normalised absolute path, not {value!r}")
+
+
+class MicroVMSettings(_SettingsModel):
+    """How the microVM backend boots its virtual machines (section 9.7).
+
+    ``kernel`` is an uncompressed guest kernel and ``init`` a static
+    build of Cloche's guest init. Each is a file in a store path, such as
+    ``/lattice/store/<hash>-linux/vmlinux``, or a file elsewhere on the
+    host. ``vmm`` is the virtual machine monitor, found in PATH unless
+    ``vmm_path`` names it. ``memory_mib`` and ``cpus`` size the machine,
+    and ``output_mib`` is the size of the device the outputs are written
+    to, which caps their size.
+    """
+
+    vmm: Literal["firecracker", "cloud-hypervisor", "openvmm"] = "firecracker"
+    vmm_path: str | None = None
+    kernel: str | None = None
+    init: str | None = None
+    memory_mib: int = Field(default=2048, ge=128)
+    cpus: int = Field(default=2, ge=1, le=64)
+    output_mib: int = Field(default=4096, ge=1)
+    boot_timeout: float = Field(default=60.0, gt=0)
+
+    @model_validator(mode="after")
+    def _check_paths(self) -> Self:
+        for name in ("vmm_path", "kernel", "init"):
+            _absolute(getattr(self, name), f"microvm {name}")
+        return self
+
+
 class SandboxSettings(_SettingsModel):
     """Limits the build sandbox applies to every build (section 9.4).
 
@@ -122,12 +155,23 @@ class SandboxSettings(_SettingsModel):
     ``max_silent_time`` one that writes no log output for that many
     seconds. None means no limit. ``max_open_files`` is the builder's
     ``RLIMIT_NOFILE``. None of these is part of a derivation, so changing
-    them changes no hash.
+    them changes no hash. ``runtime`` is the OCI runtime of the oci
+    backend, a name in PATH or an absolute path, and the first of crun,
+    runc and youki when unset. ``microvm`` configures the microVM
+    backend.
     """
 
     timeout: int | None = Field(default=None, gt=0)
     max_silent_time: int | None = Field(default=None, gt=0)
     max_open_files: int = Field(default=1024, ge=64, le=1048576)
+    runtime: str | None = Field(default=None, min_length=1)
+    microvm: MicroVMSettings = MicroVMSettings()
+
+    @model_validator(mode="after")
+    def _check_runtime(self) -> Self:
+        if self.runtime is not None and "/" in self.runtime:
+            _absolute(self.runtime, "runtime")
+        return self
 
 
 class StoreSettings(_SettingsModel):
@@ -268,7 +312,8 @@ class Settings(_SettingsModel):
         """Read the settings of a machine from the TOML file at ``path``.
 
         Top-level keys are the fields of Settings, the ``[sandbox]`` table
-        holds SandboxSettings, the ``[store]`` table StoreSettings and the
+        holds SandboxSettings, with ``[sandbox.microvm]`` for
+        MicroVMSettings, the ``[store]`` table StoreSettings and the
         ``[daemon]`` table DaemonSettings and the ``[cache]`` table
         CacheSettings, with ``[cache.shallow]`` for ShallowRules.
         Grants are arrays of tables, written ``[[daemon.clients]]`` and

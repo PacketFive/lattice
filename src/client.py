@@ -53,6 +53,7 @@ from .protocol import (
     JSON,
     NDJSON,
     RPC_PATH,
+    CheckParams,
     DeleteGenerationsParams,
     DerivationParams,
     ErrorObject,
@@ -70,7 +71,7 @@ from .protocol import (
     raise_error,
 )
 from .sandbox import BackendStatus, OciConfig
-from .settings import DEFAULT_SOCKET
+from .settings import DEFAULT_SOCKET, SandboxBackend
 from .store import BuildPlan, GCRootInfo, StorePathInfo, VerifyResult
 
 DEFAULT_URL = f"unix://{DEFAULT_SOCKET}"
@@ -98,8 +99,8 @@ class LatticeAPI(Protocol):
         """Realise ``drv`` and its inputs."""
         ...
 
-    def check(self, drv: Derivation) -> BuildResult:
-        """Rebuild the registered output of ``drv`` and compare it."""
+    def check(self, drv: Derivation, backend: SandboxBackend | None = None) -> BuildResult:
+        """Rebuild the registered output of ``drv``, on ``backend`` if given, and compare it."""
         ...
 
     def plan(self, drv: Derivation) -> BuildPlan:
@@ -342,9 +343,9 @@ class Client:
         params = DerivationParams(derivation=drv)
         return self._result(BuildResult, self._call("build", params))
 
-    def check(self, drv: Derivation) -> BuildResult:
-        """Have the daemon rebuild ``drv`` and compare the outputs."""
-        params = DerivationParams(derivation=drv)
+    def check(self, drv: Derivation, backend: SandboxBackend | None = None) -> BuildResult:
+        """Have the daemon rebuild ``drv``, on ``backend`` if given, and compare the outputs."""
+        params = CheckParams(derivation=drv, backend=backend)
         return self._result(BuildResult, self._call("check", params))
 
     def plan(self, drv: Derivation) -> BuildPlan:

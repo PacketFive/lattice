@@ -70,7 +70,7 @@ def build(
         derivation=derivation(*args, inputs=inputs),
         work_dir=str(work),
         host_store=str(store),
-        sandbox=SandboxSettings(**limits),
+        sandbox=SandboxSettings.model_validate(limits),
     )
     return run_build(request)
 

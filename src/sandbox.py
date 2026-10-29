@@ -59,11 +59,14 @@ class BuildOutcome(Model):
     """A finished build: the host path of each output, the log and the time taken.
 
     Each output is copied to ``<work_dir>/out/<output name>``.
+    ``boot_seconds`` is the time the microVM backend took to boot the
+    virtual machine, and None on the other backends.
     """
 
     outputs: dict[str, str]
     log: str
     seconds: float
+    boot_seconds: float | None = None
 
 
 def input_closure(drv: Derivation) -> tuple[Derivation, ...]:
@@ -139,7 +142,7 @@ def build_command(
 
 
 def _limits(settings: SandboxSettings) -> cloche.Limits:
-    return cloche.Limits.model_validate(settings.model_dump())
+    return cloche.Limits.model_validate(settings.model_dump(exclude={"runtime", "microvm"}))
 
 
 def make_spec(
@@ -195,24 +198,66 @@ def run_build(
         raise BuildFailed(str(error)) from None
     except cloche.SandboxUnavailable as error:
         raise BackendUnavailable(str(error)) from None
-    return BuildOutcome(outputs=outcome.outputs, log=outcome.log, seconds=outcome.seconds)
+    return BuildOutcome(
+        outputs=outcome.outputs,
+        log=outcome.log,
+        seconds=outcome.seconds,
+        boot_seconds=outcome.boot_seconds,
+    )
 
 
-def select_backend(name: SandboxBackend) -> Backend:
-    """Return the backend called ``name``.
+def host_path(path: str, host_store: str = STORE_DIR) -> str:
+    """Return where ``path`` is on the host: under ``host_store`` if it is in the store."""
+    if path.startswith(STORE_DIR + "/"):
+        return host_store + path[len(STORE_DIR) :]
+    return path
+
+
+def guest_files(sandbox: SandboxSettings) -> tuple[str, ...]:
+    """Return the guest kernel and init of the microVM backend, as the settings name them."""
+    return tuple(path for path in (sandbox.microvm.kernel, sandbox.microvm.init) if path)
+
+
+def microvm_config(sandbox: SandboxSettings, host_store: str = STORE_DIR) -> cloche.MicroVMConfig:
+    """Return the Cloche configuration of the microVM backend in ``sandbox``.
+
+    A guest kernel or init in the store is read from ``host_store``.
+    """
+    settings = sandbox.microvm
+    fields = settings.model_dump()
+    for name in ("kernel", "init"):
+        if fields[name] is not None:
+            fields[name] = host_path(fields[name], host_store)
+    return cloche.MicroVMConfig.model_validate(fields)
+
+
+def select_backend(
+    name: SandboxBackend,
+    sandbox: SandboxSettings | None = None,
+    host_store: str = STORE_DIR,
+) -> Backend:
+    """Return the backend called ``name``, configured by ``sandbox``.
 
     Raises BackendUnavailable when it cannot run here. Lattice never falls
     back to a weaker backend.
     """
+    sandbox = sandbox or SandboxSettings()
     try:
-        return cloche.select_backend(name)
+        return cloche.select_backend(
+            name, runtime=sandbox.runtime, microvm=microvm_config(sandbox, host_store)
+        )
     except cloche.SandboxUnavailable as error:
         raise BackendUnavailable(str(error)) from None
 
 
-def backend_status() -> tuple[BackendStatus, ...]:
+def backend_status(
+    sandbox: SandboxSettings | None = None, host_store: str = STORE_DIR
+) -> tuple[BackendStatus, ...]:
     """Report which sandbox backends can run on this machine (section 9.7)."""
-    return cloche.backend_status()
+    sandbox = sandbox or SandboxSettings()
+    return cloche.backend_status(
+        runtime=sandbox.runtime, microvm=microvm_config(sandbox, host_store)
+    )
 
 
 __all__ = [
@@ -225,8 +270,11 @@ __all__ = [
     "SandboxSpec",
     "backend_status",
     "build_command",
+    "guest_files",
+    "host_path",
     "input_closure",
     "make_spec",
+    "microvm_config",
     "oci_config",
     "run_build",
     "select_backend",

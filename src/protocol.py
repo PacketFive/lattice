@@ -33,6 +33,7 @@ from .derivation import Derivation
 from .errors import LatticeError
 from .events import Event
 from .models import Model
+from .settings import SandboxBackend
 
 JSONRPC_VERSION = "2.0"
 API_VERSION = "1"
@@ -123,9 +124,15 @@ class EvaluateSourceParams(Model):
 
 
 class DerivationParams(Model):
-    """Parameters of ``build``, ``check``, ``plan`` and ``sandbox_config``."""
+    """Parameters of ``build``, ``plan`` and ``sandbox_config``."""
 
     derivation: Derivation
+
+
+class CheckParams(DerivationParams):
+    """Parameters of ``check``: ``backend`` rebuilds on that sandbox backend."""
+
+    backend: SandboxBackend | None = None
 
 
 class PathParams(Model):

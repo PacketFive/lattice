@@ -52,9 +52,17 @@ HTTP cache, a directory or a CernVM-FS repository. A build fetches every
 path a trusted cache holds instead of building it, and checks its
 signature and hashes first. Paths from CernVM-FS can be shallow paths,
 symlinks into `/cvmfs` that are fetched file by file, and `lattice
-materialise` turns one into a full copy. The OCI and microVM backends
-follow in a later phase (see the development plan in the PyrixOS
-repository).
+materialise` turns one into a full copy.
+
+Phase 6: container and microVM backends. `sandbox_backend` may be
+`namespaces`, `oci` or `microvm`, and Lattice never falls back to a
+weaker one. The OCI backend runs builds under a rootless runtime, and the
+microVM backend boots a virtual machine with its own kernel and no
+network device under Firecracker, Cloud Hypervisor or OpenVMM. The guest
+kernel and init are named in `[sandbox.microvm]`, usually as files in
+store paths, and are recorded in the provenance of every path built on
+that backend. `lattice check --backend B` rebuilds a path on backend B to
+confirm the outputs match those of the backend that built it.
 
 ## Install
 
@@ -94,6 +102,7 @@ JSON.
 lattice plan hello.pyb hello        # what a build would reuse, fetch or build
 lattice build hello.pyb hello       # prints the store path of each output
 lattice check hello.pyb hello       # or: lattice build --check hello.pyb hello
+lattice check --backend microvm hello.pyb hello   # rebuild on another backend
 lattice add-root per-user/me/hello /lattice/store/<hash>-hello
 lattice roots
 lattice path-info /lattice/store/<hash>-hello
@@ -167,6 +176,15 @@ stacks = "/run/lattice/stacks"  # slot symlinks, this by default
 timeout = 3600
 max_silent_time = 600
 max_open_files = 1024
+runtime = "crun"      # OCI runtime; the first of crun, runc, youki by default
+
+[sandbox.microvm]
+vmm = "firecracker"   # or cloud-hypervisor, openvmm
+kernel = "/lattice/store/<hash>-linux-guest/vmlinux"
+init = "/lattice/store/<hash>-cloche-guest-init/init"
+memory_mib = 2048
+cpus = 2
+output_mib = 4096     # size of the output device, which caps the outputs
 
 [cache]
 secret_key_file = "/etc/lattice/cache.key"  # on a machine that pushes
@@ -255,9 +273,6 @@ path information, verify and list roots, and may add, remove and switch
 only roots and profiles under `per-user/<name>`; admins may also collect
 garbage, push and change any root or profile. RFC 0001 section 6.2 is the specification.
 
-Methods for later phases (`switch`, `push`) already exist with their final signatures and raise `NotImplementedError`
-until their phase is complete.
-
 ## Layout
 
 | Module | Role |
@@ -274,7 +289,7 @@ until their phase is complete.
 | `transport.py` | `Daemon`: the HTTP server on the Unix socket and TLS, and caller identification |
 | `client.py` | `Client` and the `LatticeAPI` protocol |
 | `cli.py` | The `lattice` command, a wrapper around `Lattice` and `Client` |
-| `sandbox.py` | Turns a derivation into a Cloche command and runs the build in the sandbox |
+| `sandbox.py` | Turns a derivation into a Cloche command, chooses and configures the backend, and runs the build in the sandbox |
 | `store/` | The store: layout, locks, content hashes, reference scanning, the database, publication, downloads, the builder and the garbage collector |
 | `procscan.py` | Finds the store paths that running processes use |
 

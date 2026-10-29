@@ -147,6 +147,17 @@ def test_cli(
     assert "rebuilt with the same contents" in capsys.readouterr().out
     assert cli.main(["check", hello, "hello"]) == 0
     capsys.readouterr()
+    assert cli.main(["build", "--backend", "oci", hello, "hello"]) == 1
+    assert "--backend applies only with --check" in capsys.readouterr().err
+    chosen: list[str] = []
+    monkeypatch.setattr(
+        "lattice.store.builder.select_backend",
+        lambda name, *args: chosen.append(name) or lattice.backend,
+    )
+    assert cli.main(["check", "--backend", "microvm", hello, "hello"]) == 0
+    assert cli.main(["build", "--check", "--backend", "oci", hello, "hello"]) == 0
+    assert chosen == ["microvm", "oci"]
+    capsys.readouterr()
     assert cli.main(["path-info", HELLO.store_path]) == 0
     assert json.loads(capsys.readouterr().out)["path"] == HELLO.store_path
     assert cli.main(["verify", HELLO.store_path]) == 0

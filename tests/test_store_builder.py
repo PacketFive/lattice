@@ -174,6 +174,58 @@ def test_check(layout: StoreLayout, new_backend: Callable[..., StoreBackend]) ->
     assert Path(layout.physical(a.store_path), "file").read_text(encoding="utf-8") == ""
 
 
+def test_check_on_another_backend(
+    layout: StoreLayout, new_backend: Callable[..., StoreBackend], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    a = drv("a", f"{TOOLS.store_path}/bin/sh")
+    b = drv("b", a=a)
+    configured = new_backend()
+    builder(layout, configured).build(b)
+    chosen: list[tuple[str, str]] = []
+    other = new_backend("changed")
+
+    def select(name: str, sandbox: object, host_store: str) -> StoreBackend:
+        chosen.append((name, host_store))
+        return other
+
+    monkeypatch.setattr("lattice.store.builder.select_backend", select)
+    with pytest.raises(BuildFailed, match="b: the rebuilt outputs differ"):
+        builder(layout, configured).check(b, "oci")
+    assert chosen == [("oci", layout.store)]
+    assert [job.spec.name for job in other.jobs] == ["b"]
+
+
+def test_microvm_records_guest_files(
+    tmp_path: Path, layout: StoreLayout, new_backend: Callable[..., StoreBackend]
+) -> None:
+    backend = new_backend()
+    backend.name = "microvm"
+    init = tmp_path / "init"
+    init.write_bytes(b"guest init")
+    settings = Settings.model_validate(
+        {
+            "store": {"root": layout.root},
+            "sandbox": {"microvm": {"kernel": SH, "init": str(init)}},
+        }
+    )
+    a = drv("a")
+    events: list[Event] = []
+    Builder(layout, settings, backend=backend, on_event=events.append).build(a)
+    connection = database.connect(layout)
+    try:
+        record = database.build_record(connection, a.store_path)
+        tools = database.path_info(connection, TOOLS.store_path)
+    finally:
+        connection.close()
+    assert record is not None
+    assert tools is not None
+    assert record.backend == "microvm"
+    assert (TOOLS.store_path, tools.content_sha256) in record.inputs
+    assert (str(init), hashlib.sha256(b"guest init").hexdigest()) in record.inputs
+    finished = [e for e in events if isinstance(e, BuildFinished)]
+    assert finished[-1].boot_seconds is None
+
+
 BODY = b"source code\n"
 
 

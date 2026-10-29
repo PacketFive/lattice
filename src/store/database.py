@@ -104,8 +104,9 @@ class BuildRecord(Model):
     """How a path was built here: the backend, its times and its inputs.
 
     ``inputs`` holds each input store path with the SHA-256 of its
-    contents. The times are RFC 3339 in UTC. This is what the provenance
-    of the path states (section 14.9).
+    contents, and on the microVM backend the guest kernel and init. The
+    times are RFC 3339 in UTC. This is what the provenance of the path
+    states (section 14.9).
     """
 
     backend: str

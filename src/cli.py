@@ -4,8 +4,8 @@
 The subcommands are::
 
     lattice [--daemon | --remote URL] eval FILE.pyb
-    lattice [--daemon | --remote URL] build [--check] FILE.pyb [NAME]
-    lattice [--daemon | --remote URL] check FILE.pyb [NAME]
+    lattice [--daemon | --remote URL] build [--check [--backend B]] FILE.pyb [NAME]
+    lattice [--daemon | --remote URL] check [--backend B] FILE.pyb [NAME]
     lattice [--daemon | --remote URL] plan FILE.pyb [NAME]
     lattice [--daemon | --remote URL] sandbox-config FILE.pyb [NAME]
     lattice [--daemon | --remote URL] path-info PATH
@@ -32,9 +32,10 @@ store path and canonical JSON. Nothing is built. The commands that take
 FILE.pyb [NAME] act on derivation NAME of the file; NAME may be left out
 when the file defines only one. ``build`` builds it and prints its output
 paths, and ``build --check`` and ``check`` build it again and compare
-(RFC 0001 section 16). ``plan`` prints what a build would reuse, download
-or build, and ``sandbox-config`` the OCI runtime configuration of the
-sandbox that would build it. ``path-info`` prints what the store database
+(RFC 0001 section 16), on sandbox backend B if ``--backend`` names one.
+``plan`` prints what a build would reuse, download or build, and
+``sandbox-config`` the OCI runtime configuration of the sandbox that
+would build it. ``path-info`` prints what the store database
 records about PATH, and ``verify`` hashes PATH again and exits with 1 if
 it changed. ``roots``, ``add-root`` and ``remove-root`` list and change
 the roots collection keeps, and ``gc`` collects garbage.
@@ -98,7 +99,7 @@ from .events import (
     SubstitutionStarted,
 )
 from .models import Generation, SlotState
-from .settings import DEFAULT_SETTINGS_PATH, Settings
+from .settings import DEFAULT_SETTINGS_PATH, SANDBOX_BACKENDS, Settings
 from .transport import Daemon
 
 # The name of the variable that holds the token, not a token.
@@ -145,9 +146,11 @@ def build_parser() -> argparse.ArgumentParser:
     build = commands.add_parser("build", help="build a derivation and print its outputs")
     _derivation_arguments(build)
     build.add_argument("--check", action="store_true", help="rebuild and compare instead")
+    _backend_argument(build)
     build.set_defaults(handler=cmd_build)
     check = commands.add_parser("check", help="rebuild a derivation and compare the outputs")
     _derivation_arguments(check)
+    _backend_argument(check)
     check.set_defaults(handler=cmd_check)
     plan = commands.add_parser("plan", help="show what building a derivation would do")
     _derivation_arguments(plan)
@@ -213,6 +216,14 @@ def build_parser() -> argparse.ArgumentParser:
     daemon = commands.add_parser("daemon", help="run the daemon")
     daemon.set_defaults(handler=cmd_daemon)
     return parser
+
+
+def _backend_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--backend",
+        choices=SANDBOX_BACKENDS,
+        help="rebuild on this sandbox backend instead of the configured one",
+    )
 
 
 def _derivation_arguments(parser: argparse.ArgumentParser) -> None:
@@ -312,6 +323,8 @@ def cmd_build(args: argparse.Namespace) -> int:
     """
     if args.check:
         return cmd_check(args)
+    if args.backend is not None:
+        raise LatticeError("--backend applies only with --check")
     api = make_api(args)
     result = api.build(select(api, args.file, args.name))
     for path in result.outputs.values():
@@ -322,7 +335,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 def cmd_check(args: argparse.Namespace) -> int:
     """Rebuild derivation ``args.name`` of ``args.file`` and compare. Return 0 if the same."""
     api = make_api(args)
-    result = api.check(select(api, args.file, args.name))
+    result = api.check(select(api, args.file, args.name), args.backend)
     print(f"{result.store_path}: rebuilt with the same contents")
     return 0
 

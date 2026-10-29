@@ -173,9 +173,17 @@ def test_authorize_admin_methods() -> None:
 
 def test_rpc_not_implemented(factory: Factory) -> None:
     drv = {"name": "a", "builder": "/bin/sh"}
-    request = {"jsonrpc": "2.0", "method": "check", "params": {"derivation": drv}, "id": 1}
+    request = {"jsonrpc": "2.0", "method": "build", "params": {"derivation": drv}, "id": 1}
     reply = rpc(Dispatcher(factory), request)
     assert reply["error"]["code"] == NOT_IMPLEMENTED
+
+
+def test_rpc_check_rejects_unknown_backend(factory: Factory) -> None:
+    drv = {"name": "a", "builder": "/bin/sh"}
+    params = {"derivation": drv, "backend": "docker"}
+    request = {"jsonrpc": "2.0", "method": "check", "params": params, "id": 1}
+    reply = rpc(Dispatcher(factory), request)
+    assert reply["error"]["code"] == INVALID_PARAMS
 
 
 def test_rpc_invalid_derivation(factory: Factory) -> None:

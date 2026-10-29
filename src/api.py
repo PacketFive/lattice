@@ -10,8 +10,7 @@ settings from the machine on its own.
 Methods return immutable result models (models.py) and raise LatticeError
 subclasses. Client (client.py) has the same methods and talks to the
 daemon instead; both satisfy the LatticeAPI protocol. Each method states
-the phase of the development plan that implements it, and raises
-NotImplementedError until then.
+the phase of the development plan that implemented it.
 
 Example::
 
@@ -51,7 +50,7 @@ from .models import (
 )
 from .sandbox import BackendStatus, OciConfig, make_spec, oci_config
 from .sandbox import backend_status as probe_backends
-from .settings import Settings
+from .settings import SandboxBackend, Settings
 from .stdlib import build_host
 from .store import (
     Builder,
@@ -159,14 +158,15 @@ class Lattice:
         """
         return self._builder().build(drv)
 
-    def check(self, drv: Derivation) -> BuildResult:
+    def check(self, drv: Derivation, backend: SandboxBackend | None = None) -> BuildResult:
         """Rebuild the registered outputs of ``drv`` and compare them (section 16). Phase 3.
 
-        The rebuilt outputs are thrown away. Raises StoreError if ``drv`` is
-        not built and BuildFailed, naming the files that differ, if the
-        outputs are not the same.
+        ``backend`` rebuilds on that sandbox backend instead of the
+        configured one. The rebuilt outputs are thrown away. Raises
+        StoreError if ``drv`` is not built and BuildFailed, naming the
+        files that differ, if the outputs are not the same.
         """
-        return self._builder().check(drv)
+        return self._builder().check(drv, backend)
 
     def plan(self, drv: Derivation) -> BuildPlan:
         """List what building ``drv`` would download, build or reuse. Phase 3."""
@@ -249,7 +249,7 @@ class Lattice:
 
     def backend_status(self) -> tuple[BackendStatus, ...]:
         """Report which sandbox backends can run on this machine (section 9.7). Phase 2."""
-        return probe_backends()
+        return probe_backends(self.settings.sandbox, self.layout.store)
 
     def gc(self) -> GCResult:
         """Remove every store path no root or running process keeps (section 12). Phase 3."""

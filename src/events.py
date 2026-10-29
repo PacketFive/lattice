@@ -61,13 +61,18 @@ class BuildLog(Event):
 
 
 class BuildFinished(Event):
-    """The derivation ``name`` is in the store; ``built`` is False if it already was."""
+    """The derivation ``name`` is in the store; ``built`` is False if it already was.
+
+    ``boot_seconds`` is the virtual machine boot time of a build on the
+    microVM backend (section 15), and None otherwise.
+    """
 
     type: Literal["build_finished"] = "build_finished"
     name: str
     store_path: str
     built: bool
     seconds: float
+    boot_seconds: float | None = None
 
 
 class CollectionFinished(Event):

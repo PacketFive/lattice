@@ -103,6 +103,8 @@ def test_sandbox_methods(unix_daemon: Daemon) -> None:
     config = local(unix_daemon).sandbox_config(drv)
     assert config.process.args == (drv.builder,)
     assert config.linux.uid_mappings[0].host_id == 1000
+    assert local(unix_daemon).check(drv).outputs == {"out": "None"}
+    assert local(unix_daemon).check(drv, "microvm").outputs == {"out": "microvm"}
     statuses = local(unix_daemon).backend_status()
     assert [(s.name, s.available) for s in statuses] == [("namespaces", True), ("oci", False)]
 

@@ -29,8 +29,10 @@ from lattice.sandbox import (
     BuildRequest,
     SandboxSpec,
     build_command,
+    host_path,
     input_closure,
     make_spec,
+    microvm_config,
     oci_config,
     run_build,
     select_backend,
@@ -204,7 +206,8 @@ def test_backend_status_lists_every_backend(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(subprocess, "run", failed_run)
     statuses = Lattice().backend_status()
     assert [s.name for s in statuses] == ["namespaces", "oci", "microvm"]
-    assert statuses[1].reason == "not available in this release"
+    assert statuses[1].reason.startswith("unprivileged user namespaces do not work")
+    assert statuses[2].reason == "no guest kernel and init are configured"
 
 
 def test_errors_become_lattice_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -240,9 +243,11 @@ def test_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_select_backend_never_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(BackendUnavailable, match="oci"):
-        select_backend("oci")
+    with pytest.raises(BackendUnavailable, match="no guest kernel"):
+        select_backend("microvm")
     monkeypatch.setattr(subprocess, "run", failed_run)
+    with pytest.raises(BackendUnavailable, match="cannot run here"):
+        select_backend("oci")
     with pytest.raises(BackendUnavailable, match="cannot run here"):
         select_backend("namespaces")
 
@@ -288,7 +293,58 @@ def test_cli_backend_status(
     assert cli.main(["backend-status"]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert lines[0].startswith("namespaces: unprivileged user namespaces do not work")
-    assert lines[1:] == [
-        "oci: not available in this release",
-        "microvm: not available in this release",
-    ]
+    assert lines[1].startswith("oci: unprivileged user namespaces do not work")
+    assert lines[2] == "microvm: no guest kernel and init are configured"
+
+
+def test_host_path() -> None:
+    assert host_path(f"{STORE_DIR}/x-a/vmlinux", "/srv/root/store") == "/srv/root/store/x-a/vmlinux"
+    assert host_path("/boot/vmlinux", "/srv/root/store") == "/boot/vmlinux"
+
+
+def test_microvm_config_maps_store_files() -> None:
+    sandbox = SandboxSettings.model_validate(
+        {
+            "microvm": {
+                "vmm": "cloud-hypervisor",
+                "kernel": f"{STORE_DIR}/x-k/vmlinux",
+                "init": "/srv/init",
+                "cpus": 4,
+            }
+        }
+    )
+    config = microvm_config(sandbox, "/r/store")
+    assert config.vmm == "cloud-hypervisor"
+    assert config.kernel == "/r/store/x-k/vmlinux"
+    assert config.init == "/srv/init"
+    assert config.cpus == 4
+
+
+def test_select_backend_passes_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, object] = {}
+
+    def select(name: str, **kwargs: object) -> str:
+        seen.update(kwargs, name=name)
+        return "backend"
+
+    monkeypatch.setattr("cloche.select_backend", select)
+    sandbox = SandboxSettings.model_validate(
+        {"runtime": "/usr/bin/crun", "microvm": {"kernel": f"{STORE_DIR}/x-k/vmlinux"}}
+    )
+    assert select_backend("oci", sandbox, "/r/store") == "backend"
+    assert seen["name"] == "oci"
+    assert seen["runtime"] == "/usr/bin/crun"
+    assert seen["microvm"].kernel == "/r/store/x-k/vmlinux"  # type: ignore[attr-defined]
+
+
+def test_sandbox_settings_reject_relative_paths() -> None:
+    assert SandboxSettings(runtime="crun").runtime == "crun"
+    with pytest.raises(SettingsError, match="runtime"):
+        SandboxSettings(runtime="bin/crun")
+    for name in ("vmm_path", "kernel", "init"):
+        with pytest.raises(SettingsError, match=name):
+            SandboxSettings(microvm={name: "vmlinux"})  # type: ignore[arg-type]
+    with pytest.raises(SettingsError, match="kernel"):
+        SandboxSettings(microvm={"kernel": "/boot/../vmlinux"})  # type: ignore[arg-type]
+    with pytest.raises(SettingsError, match="vmm"):
+        SandboxSettings(microvm={"vmm": "qemu"})  # type: ignore[arg-type]

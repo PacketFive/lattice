@@ -51,6 +51,7 @@ from .protocol import (
     INVALID_REQUEST,
     METHOD_NOT_FOUND,
     PARSE_ERROR,
+    CheckParams,
     DeleteGenerationsParams,
     DerivationParams,
     EvaluateSourceParams,
@@ -90,7 +91,7 @@ METHODS: dict[str, Method] = {
         EvaluateSourceParams, Role.USER, lambda api, p: api.evaluate_source(p.source, p.filename)
     ),
     "build": Method(DerivationParams, Role.USER, lambda api, p: api.build(p.derivation)),
-    "check": Method(DerivationParams, Role.USER, lambda api, p: api.check(p.derivation)),
+    "check": Method(CheckParams, Role.USER, lambda api, p: api.check(p.derivation, p.backend)),
     "plan": Method(DerivationParams, Role.USER, lambda api, p: api.plan(p.derivation)),
     "path_info": Method(PathParams, Role.USER, lambda api, p: api.path_info(p.path)),
     "verify": Method(PathParams, Role.USER, lambda api, p: api.verify(p.path)),

@@ -132,7 +132,8 @@ def statement(
 ) -> Statement:
     """Return the provenance of ``entry``, built from ``inputs`` by ``builder_id``.
 
-    ``inputs`` holds each input store path with the SHA-256 of its contents.
+    ``inputs`` holds each input store path with the SHA-256 of its contents,
+    and on the microVM backend the guest kernel and init.
     """
     return Statement(
         subject=(Subject(name=entry.store_path, digest=Digest(sha256=entry.content_sha256)),),

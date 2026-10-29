@@ -19,6 +19,7 @@ derivation, so two processes never build the same derivation at once.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import os
 import sqlite3
 import tempfile
@@ -28,12 +29,18 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
-from ..derivation import BUILTIN_FETCH_URL, BUILTIN_PROFILE, BUILTIN_STACK, Derivation
+from ..derivation import (
+    BUILTIN_FETCH_URL,
+    BUILTIN_PROFILE,
+    BUILTIN_STACK,
+    STORE_DIR,
+    Derivation,
+)
 from ..errors import BuildFailed, StoreError
 from ..events import BuildFinished, BuildLog, BuildStarted, Event, EventHandler, emit
 from ..models import BuildResult, Model
-from ..sandbox import BuildRequest, run_build
-from ..settings import Settings, ShallowRules
+from ..sandbox import BuildRequest, guest_files, host_path, run_build, select_backend
+from ..settings import SandboxBackend, Settings, ShallowRules
 from . import database, lock
 from .combine import combine
 from .fetch import fetch
@@ -204,9 +211,9 @@ class Builder:
 
     def _backend(self) -> Backend:
         if self.backend is None:
-            from ..sandbox import select_backend
-
-            self.backend = select_backend(self.settings.sandbox_backend)
+            self.backend = select_backend(
+                self.settings.sandbox_backend, self.settings.sandbox, self.layout.store
+            )
         return self.backend
 
     def plan(self, drv: Derivation) -> BuildPlan:
@@ -306,7 +313,7 @@ class Builder:
                 started_at = _timestamp()
                 self._emit(BuildStarted(name=drv.name, store_path=drv.store_path))
                 with self._work_dir(drv) as work:
-                    outputs = self._produce(drv, work, inputs)
+                    outputs, boot = self._produce(drv, work, inputs)
                     entries = realise(self.layout, connection, drv, outputs, inputs)
                 self._record(connection, drv, entries, inputs, started_at)
                 self._emit(
@@ -315,6 +322,7 @@ class Builder:
                         store_path=drv.store_path,
                         built=True,
                         seconds=time.monotonic() - started,
+                        boot_seconds=boot,
                     )
                 )
                 return True
@@ -329,13 +337,21 @@ class Builder:
         inputs: tuple[str, ...],
         started_at: str,
     ) -> None:
-        """Record how the outputs of ``drv`` were built, for their provenance (section 14.9)."""
+        """Record how the outputs of ``drv`` were built, for their provenance (section 14.9).
+
+        A build on the microVM backend also depends on the guest kernel and
+        init, which are recorded as inputs: the store path that holds each,
+        or the file itself with the SHA-256 of its bytes if it is not in
+        the store.
+        """
         backend = "builtin" if drv.builder.startswith("builtin:") else self._backend().name
         hashes = []
         for path in inputs:
             info = database.path_info(connection, path)
             if info is not None:
                 hashes.append((path, info.content_sha256))
+        if backend == "microvm":
+            hashes.extend(self._guest_inputs(connection))
         record = database.BuildRecord(
             backend=backend,
             started_at=started_at,
@@ -344,6 +360,22 @@ class Builder:
         )
         for entry in entries:
             database.record_build(connection, entry.path, record)
+
+    def _guest_inputs(self, connection: sqlite3.Connection) -> list[tuple[str, str]]:
+        found: list[tuple[str, str]] = []
+        for path in guest_files(self.settings.sandbox):
+            if path.startswith(STORE_DIR + "/"):
+                store_path = "/".join(path.split("/")[:4])
+                info = database.path_info(connection, store_path)
+                if info is not None:
+                    found.append((store_path, info.content_sha256))
+                    continue
+            digest = hashlib.sha256()
+            with open(host_path(path, self.layout.store), "rb") as file:
+                while chunk := file.read(1 << 20):
+                    digest.update(chunk)
+            found.append((path, digest.hexdigest()))
+        return found
 
     def _inputs(self, connection: sqlite3.Connection, drv: Derivation) -> tuple[str, ...]:
         direct = direct_inputs(drv)
@@ -356,16 +388,26 @@ class Builder:
     def _work_dir(self, drv: Derivation) -> _WorkDir:
         return _WorkDir(self.layout.staging, drv.hash[:32])
 
-    def _produce(self, drv: Derivation, work: str, inputs: tuple[str, ...]) -> dict[str, str]:
-        """Download or build ``drv`` in ``work`` and return the path of each output."""
+    def _produce(
+        self,
+        drv: Derivation,
+        work: str,
+        inputs: tuple[str, ...],
+        backend: Backend | None = None,
+    ) -> tuple[dict[str, str], float | None]:
+        """Download or build ``drv`` in ``work``.
+
+        Returns the path of each output and the boot time of the virtual
+        machine, or None. ``backend`` overrides the configured backend.
+        """
         if drv.builder == BUILTIN_FETCH_URL:
             if drv.outputs != ("out",):
                 raise BuildFailed(f"{drv.name}: fetch_url has the single output out")
             destination = os.path.join(work, "out")
             fetch(drv, destination)
-            return {"out": destination}
+            return {"out": destination}, None
         if drv.builder in (BUILTIN_STACK, BUILTIN_PROFILE):
-            return combine(self.layout, drv, os.path.join(work, "out"))
+            return combine(self.layout, drv, os.path.join(work, "out")), None
         name = drv.name
 
         def on_log(text: str) -> None:
@@ -384,19 +426,24 @@ class Builder:
                     if os.path.islink(physical := self.layout.physical(path))
                 },
             ),
-            self._backend(),
+            backend or self._backend(),
             on_log,
         )
-        return outcome.outputs
+        return outcome.outputs, outcome.boot_seconds
 
-    def check(self, drv: Derivation) -> BuildResult:
+    def check(self, drv: Derivation, backend: SandboxBackend | None = None) -> BuildResult:
         """Build ``drv`` again and compare the result with its registered outputs (section 16).
 
         Its inputs are built first if needed. The new outputs are thrown
-        away, never registered. Raises StoreError if ``drv`` is not
+        away, never registered. ``backend`` rebuilds ``drv`` on that
+        backend instead of the configured one; its inputs are built on
+        the configured one. Raises StoreError if ``drv`` is not
         registered and BuildFailed, naming the files that differ, if the
         outputs are not the same.
         """
+        chosen: Backend | None = None
+        if backend is not None:
+            chosen = select_backend(backend, self.settings.sandbox, self.layout.store)
         started = time.monotonic()
         database.connect(self.layout, create=True).close()
         built: dict[str, bool] = {}
@@ -415,7 +462,7 @@ class Builder:
             finally:
                 connection.close()
             with self._work_dir(drv) as work:
-                outputs = self._produce(drv, work, inputs)
+                outputs, _ = self._produce(drv, work, inputs, chosen)
                 entries = scan(drv, outputs, inputs)
                 differences = [
                     f"{name}: {item}"

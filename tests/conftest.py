@@ -44,6 +44,7 @@ from lattice import (
 from lattice.kmod import LoadedModule, read_info
 from lattice.procscan import ProcessUse
 from lattice.sandbox import BackendStatus, OciConfig, SandboxJob, make_spec, oci_config
+from lattice.settings import SandboxBackend
 from lattice.store import BuildPlan, GCRootInfo, StorePathInfo, VerifyResult
 
 CREATED = datetime(2025, 1, 1, tzinfo=UTC)
@@ -68,8 +69,15 @@ class FakeAPI:
     def build(self, drv: Derivation) -> BuildResult:
         raise NotImplementedError
 
-    def check(self, drv: Derivation) -> BuildResult:
-        raise NotImplementedError
+    def check(self, drv: Derivation, backend: SandboxBackend | None = None) -> BuildResult:
+        """Return a result whose output names ``backend``."""
+        return BuildResult(
+            derivation=drv,
+            store_path=drv.store_path,
+            outputs={"out": str(backend)},
+            built=True,
+            seconds=0.0,
+        )
 
     def plan(self, drv: Derivation) -> BuildPlan:
         raise NotImplementedError
