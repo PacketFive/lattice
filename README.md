@@ -83,7 +83,9 @@ them.
 Python 3.12 or later is required. The only runtime dependencies are
 PyBonsai, Cloche, [Pydantic](https://docs.pydantic.dev/) 2 and
 [cryptography](https://cryptography.io/) for Ed25519 signatures. The distribution name is
-`pyrixos-lattice`; the import name is `lattice`.
+`pyrixos-lattice`; the import name is `lattice`. `lattice config` also needs
+[Trellis](https://github.com/PacketFive/trellis), which
+the `config` extra adds.
 
 ## Use
 
@@ -149,6 +151,18 @@ nvidia_570 = stack(
 )
 system = profile(name="system", packages=[slurm], stacks={"nvidia": nvidia_570})
 ```
+
+System options, with [Trellis](https://github.com/PacketFive/trellis)
+installed through the `config` extra:
+
+```sh
+lattice config menu                  # the same as: trellis menu
+lattice config set NET=y WIFI=m
+lattice config explain WIFI n
+```
+
+`lattice config` passes its arguments to the `trellis` command and always
+runs locally.
 
 Without `NAME`, a command that takes `FILE [NAME]` uses the only derivation
 the file defines. Build progress is printed on standard error. A build adds

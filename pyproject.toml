@@ -15,6 +15,8 @@ authors = [{ name = "PacketFive" }]
 dependencies = ["cloche", "cryptography>=42", "pybonsai-lang", "pydantic>=2.6,<3"]
 
 [project.optional-dependencies]
+# lattice config runs Trellis, the configuration command.
+config = ["trellis-kconfig"]
 # Everything the quality gates need. The pybootstrap name on PyPI belongs to
 # an unrelated placeholder, so it is installed from its repository.
 dev = [

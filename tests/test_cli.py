@@ -2,6 +2,7 @@
 """Command line tests: the ``lattice`` entry point."""
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -125,3 +126,24 @@ def test_daemon_command_serves(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     settings = write(tmp_path, "s.toml", 'sandbox_backend = "oci"\n')
     assert cli.main(["--settings", str(settings), "daemon"]) == 0
     assert served == [Settings(sandbox_backend="oci")]
+
+
+def test_config_runs_trellis(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("trellis")
+    kconfig = write(tmp_path, "Kconfig", 'config NET\n\tbool "net"\n\tdefault y\n')
+    out = tmp_path / "config.pyb"
+    argv = ["config", "--kconfig", str(kconfig), "--config", str(out), "olddefconfig"]
+    assert cli.main(argv) == 0
+    assert '"NET": True' in out.read_text()
+    with pytest.raises(SystemExit):
+        cli.main(["--daemon", *argv])
+    assert "always runs locally" in capsys.readouterr().err
+    with pytest.raises(SystemExit):
+        cli.main(["eval", "--kconfig", "x"])
+    assert "unrecognized arguments: --kconfig" in capsys.readouterr().err
+    monkeypatch.setitem(sys.modules, "trellis.cli", None)
+    with pytest.raises(SystemExit):
+        cli.main(argv)
+    assert "Trellis is not installed" in capsys.readouterr().err

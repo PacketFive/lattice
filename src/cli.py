@@ -24,6 +24,7 @@ The subcommands are::
     lattice [--daemon | --remote URL] materialise PATH
     lattice [--daemon | --remote URL] push --to URL PATH...
     lattice generate-key NAME FILE
+    lattice config [ARGUMENTS...]
     lattice activate-boot
     lattice daemon
 
@@ -62,6 +63,10 @@ signing key called NAME to FILE, readable by its owner only, and prints
 the public key to list in ``trusted_keys``; it always runs locally
 (RFC 0001 section 14).
 
+``config`` runs the Trellis configuration command with ARGUMENTS, so
+``lattice config menu --kconfig Kconfig`` is ``trellis menu --kconfig
+Kconfig``. It always runs locally and needs the trellis package.
+
 Build progress, logs, substitutions and activation steps go to stderr.
 
 Every subcommand calls one method of a LatticeAPI and only formats its
@@ -78,6 +83,7 @@ where other users could see it in the process list.
 from __future__ import annotations
 
 import argparse
+import importlib
 import os
 import sys
 from collections.abc import Sequence
@@ -213,6 +219,11 @@ def build_parser() -> argparse.ArgumentParser:
     key.add_argument("name", help="key name, for example cache.example.org-1")
     key.add_argument("file", help="new file for the secret key")
     key.set_defaults(handler=cmd_generate_key)
+    configure = commands.add_parser(
+        "config", help="run the Trellis configuration command", add_help=False
+    )
+    configure.add_argument("arguments", nargs=argparse.REMAINDER, help="Trellis arguments")
+    configure.set_defaults(handler=cmd_config)
     daemon = commands.add_parser("daemon", help="run the daemon")
     daemon.set_defaults(handler=cmd_daemon)
     return parser
@@ -517,10 +528,26 @@ def cmd_daemon(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_config(args: argparse.Namespace) -> int:
+    """Run ``trellis`` with ``args.arguments`` and return its exit status."""
+    if args.daemon or args.remote is not None or args.ca or args.cert or args.key:
+        raise UsageError("lattice config always runs locally")
+    try:
+        trellis = importlib.import_module("trellis.cli")
+    except ImportError:
+        raise UsageError("Trellis is not installed; install the trellis package") from None
+    status: int = trellis.main(args.arguments)
+    return status
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Parse ``argv``, run the selected subcommand and return its exit code."""
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args, extra = parser.parse_known_args(argv)
+    if args.command == "config":
+        args.arguments = [*extra, *args.arguments]
+    elif extra:
+        parser.error(f"unrecognized arguments: {' '.join(extra)}")
     try:
         return args.handler(args)
     except UsageError as error:
