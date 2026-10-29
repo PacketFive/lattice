@@ -94,7 +94,7 @@ from .settings import (
 from .store import BuildPlan, GCRootInfo, PlannedStep, StorePathInfo, VerifyResult
 from .transport import Daemon
 
-__version__ = "0.0.0"
+__version__ = "0.9.0"
 
 __all__ = [
     "ActivationDeferred",

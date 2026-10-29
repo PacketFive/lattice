@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,15 +10,42 @@ dynamic = ["version"]
 description = "Lattice, the PyrixOS package manager"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "GPL-2.0-only" }
+license = "GPL-2.0-only"
+license-files = ["LICENSE"]
 authors = [{ name = "PacketFive" }]
-dependencies = ["cloche", "cryptography>=42", "pybonsai-lang", "pydantic>=2.6,<3"]
+keywords = ["package-manager", "reproducible-builds", "linux", "distribution", "pyrixos"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: System Administrators",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Software Distribution",
+  "Topic :: Software Development :: Build Tools",
+  "Typing :: Typed",
+]
+dependencies = [
+  "cloche>=1.0,<2",
+  "cryptography>=42",
+  "pybonsai-lang>=1.0,<2",
+  "pydantic>=2.6,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/PacketFive/lattice"
+Source = "https://github.com/PacketFive/lattice"
+Issues = "https://github.com/PacketFive/lattice/issues"
 
 [project.optional-dependencies]
 # lattice config runs Trellis, the configuration command.
-config = ["trellis-kconfig"]
-# Everything the quality gates need. The pybootstrap name on PyPI belongs to
-# an unrelated placeholder, so it is installed from its repository.
+config = ["trellis-kconfig>=1.0,<2"]
+
+[dependency-groups]
+# Everything the quality gates need, installed with "pip install --group dev"
+# (pip 25.1 or later). Groups are not part of the package metadata, so the
+# pybootstrap name on PyPI, which belongs to an unrelated placeholder, can be
+# replaced by its repository here.
 dev = [
   "pybootstrap @ git+https://github.com/packetfive/pybootstrap.git",
   "ruff>=0.4",

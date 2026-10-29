@@ -67,11 +67,21 @@ confirm the outputs match those of the backend that built it.
 ## Install
 
 ```sh
-pip install --config-settings editable_mode=strict -e '../pybonsai[dev]' -e '../cloche[dev]' -e '.[dev]'
+pip install pyrixos-lattice            # or 'pyrixos-lattice[config]' for lattice config
+```
+
+Lattice is at 0.9 until PyrixOS 1.0, so its interface may still change
+between minor versions. To work on Lattice itself, next to checkouts of
+the components:
+
+```sh
+python -m pip install --upgrade "pip>=25.1"
+pip install --group dev
+pip install --config-settings editable_mode=strict -e ../pybonsai -e ../cloche -e ../trellis -e .
 pybootstrap check
 ```
 
-The `dev` extra installs [pybootstrap](https://github.com/packetfive/pybootstrap)
+The `dev` dependency group installs [pybootstrap](https://github.com/packetfive/pybootstrap)
 and the tools its gates drive (ruff, pyright, pytest with coverage).
 
 The repository's `src` directory is the package itself, mapped to its
@@ -86,6 +96,11 @@ PyBonsai, Cloche, [Pydantic](https://docs.pydantic.dev/) 2 and
 `pyrixos-lattice`; the import name is `lattice`. `lattice config` also needs
 [Trellis](https://github.com/PacketFive/trellis), which
 the `config` extra adds.
+
+Releases are made by pushing a tag `vX.Y.Z` that matches `__version__`
+and has a section in `CHANGELOG.md`. The release workflow runs the gates,
+builds the package, publishes it to PyPI through trusted publishing with
+attestations, and creates the GitHub release.
 
 ## Use
 
@@ -309,4 +324,4 @@ garbage, push and change any root or profile. RFC 0001 section 6.2 is the specif
 
 ## License
 
-GPL-2.0-only.
+GPL-2.0-only. See [LICENSE](LICENSE).
