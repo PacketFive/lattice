@@ -169,7 +169,7 @@ def test_spec_rejects_unknown_machine() -> None:
 def test_oci_config() -> None:
     drv = hello()
     value = json.loads(oci_config(spec_of(drv, "aarch64")).model_dump_json())
-    assert value["ociVersion"] == "1.2.0"
+    assert value["ociVersion"] == "1.0.2"
     assert value["root"] == {"path": "rootfs", "readonly": False}
     process = value["process"]
     assert process["args"] == [drv.builder]
