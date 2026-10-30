@@ -48,6 +48,8 @@ BUILTIN_STACK = "builtin:stack"
 BUILTIN_PROFILE = "builtin:profile"
 # Unpacks an archive outside the sandbox (RFC 0002 section 5.3).
 BUILTIN_UNPACK = "builtin:unpack"
+# Writes a whole system from its description (RFC 0004 section 6).
+BUILTIN_SYSTEM = "builtin:system"
 
 _COMPUTED = ("hash", "store_path")
 

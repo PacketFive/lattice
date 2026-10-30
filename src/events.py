@@ -100,6 +100,21 @@ class ActivationDeferred(Event):
     reason: str
 
 
+class ActivationStep(Event):
+    """System activation has started ``step`` for the system at ``store_path`` (RFC 0004)."""
+
+    type: Literal["activation_step"] = "activation_step"
+    step: str
+    store_path: str
+
+
+class ActivationNotice(Event):
+    """System activation reports ``text``, for example a mount that waits for the next boot."""
+
+    type: Literal["activation_notice"] = "activation_notice"
+    text: str
+
+
 class SlotChanged(Event):
     """A slot symlink now points at another stack, or was created or removed."""
 
@@ -168,6 +183,8 @@ EventUnion = (
     | CollectionFinished
     | ProfileSwitched
     | ActivationDeferred
+    | ActivationStep
+    | ActivationNotice
     | SlotChanged
     | KernelModuleLoaded
     | KernelModuleUnloaded

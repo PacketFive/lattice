@@ -23,6 +23,9 @@ Method                  Role    Further rule
 ``remove_root``         user    ``per-user/<name>`` or below it; admins any.
 ``generations``         user
 ``slots``               user
+``switch_system``       admin
+``rollback_system``     admin
+``systems``             admin
 ``switch``              user    A user may only switch, roll back or delete
 ``rollback``            user    generations of ``per-user/<name>`` and
 ``delete_generations``  user    profiles below it; admins any profile.
@@ -61,11 +64,13 @@ from .protocol import (
     PushParams,
     Request,
     RollbackParams,
+    RollbackSystemParams,
     RootNameParams,
     RootParams,
     RPCError,
     SubstituteParams,
     SwitchParams,
+    SwitchSystemParams,
     error_object,
     failure,
     success,
@@ -88,7 +93,9 @@ class Method:
 
 METHODS: dict[str, Method] = {
     "evaluate_source": Method(
-        EvaluateSourceParams, Role.USER, lambda api, p: api.evaluate_source(p.source, p.filename)
+        EvaluateSourceParams,
+        Role.USER,
+        lambda api, p: api.evaluate_source(p.source, p.filename, p.config_source),
     ),
     "build": Method(DerivationParams, Role.USER, lambda api, p: api.build(p.derivation)),
     "check": Method(CheckParams, Role.USER, lambda api, p: api.check(p.derivation, p.backend)),
@@ -109,6 +116,13 @@ METHODS: dict[str, Method] = {
         lambda api, p: api.delete_generations(p.profile, p.keep),
     ),
     "slots": Method(NoParams, Role.USER, lambda api, p: api.slots()),
+    "switch_system": Method(
+        SwitchSystemParams, Role.ADMIN, lambda api, p: api.switch_system(p.derivation, p.mode)
+    ),
+    "rollback_system": Method(
+        RollbackSystemParams, Role.ADMIN, lambda api, p: api.rollback_system(p.generation)
+    ),
+    "systems": Method(NoParams, Role.ADMIN, lambda api, p: api.systems()),
     "sandbox_config": Method(
         DerivationParams, Role.USER, lambda api, p: api.sandbox_config(p.derivation)
     ),

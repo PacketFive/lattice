@@ -7,6 +7,36 @@ PyrixOS 1.0.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-30
+
+Phase 10 of the PyrixOS development plan, system configuration
+(RFC 0004).
+
+### Added
+
+- The standard library functions `machine`, `user`, `group`,
+  `file_system`, `service` and `etc_file`, and the builder
+  `builtin:system`, which writes a whole system into one store path.
+- `Lattice.switch_system`, `rollback_system` and `systems`, with
+  `lattice switch [--boot | --test]`, `lattice systems` and
+  `lattice rollback --profile system`. Activation links `/etc` through
+  `/etc/static`, writes `passwd`, `group` and `shadow`, mounts new file
+  systems, moves slots, restarts changed systemd units and writes a
+  systemd-boot entry for each generation.
+- `lattice activate-boot --system PATH`, run by the `init` of a system.
+- `config.pyb` next to a system description is read as `config`.
+- The `[system]` settings `description` and `root`, and
+  `SystemManager`, `SystemdManager` and `OfflineManager`.
+- The sandbox settings `max_memory_mib`, `max_cpu` and
+  `max_processes`, applied through Cloche cgroups, and a `cgroups` line
+  in `lattice backend-status`.
+
+### Changed
+
+- Requires PyBonsai 1.1 and Cloche 1.1.
+- Deleting generations of `system` also removes their boot entries and
+  unused kernel images.
+
 ## [0.10.0] - 2026-10-30
 
 ### Added

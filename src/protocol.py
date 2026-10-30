@@ -32,7 +32,7 @@ from . import errors
 from .derivation import Derivation
 from .errors import LatticeError
 from .events import Event
-from .models import Model
+from .models import Model, SystemMode
 from .settings import SandboxBackend
 
 JSONRPC_VERSION = "2.0"
@@ -116,11 +116,13 @@ class EvaluateSourceParams(Model):
     """Parameters of ``evaluate_source``.
 
     The daemon never reads files named by a caller. Client.evaluate reads
-    the file itself and sends its text here.
+    the file itself and sends its text here, with the text of the
+    ``config.pyb`` next to it in ``config_source`` (RFC 0004 section 5.2).
     """
 
     source: str
     filename: str = "<string>"
+    config_source: str | None = None
 
 
 class DerivationParams(Model):
@@ -159,6 +161,19 @@ class SwitchParams(Model):
 
     profile: str
     derivation: Derivation
+
+
+class SwitchSystemParams(Model):
+    """Parameters of ``switch_system``."""
+
+    derivation: Derivation
+    mode: SystemMode = "switch"
+
+
+class RollbackSystemParams(Model):
+    """Parameters of ``rollback_system``. ``generation`` None means the previous one."""
+
+    generation: int | None = Field(default=None, ge=1)
 
 
 class ProfileParams(Model):

@@ -47,6 +47,8 @@ from .errors import (
 )
 from .events import (
     ActivationDeferred,
+    ActivationNotice,
+    ActivationStep,
     BuildFinished,
     BuildLog,
     BuildStarted,
@@ -75,6 +77,8 @@ from .models import (
     Role,
     SlotState,
     SubstitutionResult,
+    SystemGeneration,
+    SystemMode,
 )
 from .sandbox import BackendStatus, OciConfig
 from .settings import (
@@ -89,15 +93,25 @@ from .settings import (
     Settings,
     ShallowRules,
     StoreSettings,
+    SystemSettings,
     TokenGrant,
 )
 from .store import BuildPlan, GCRootInfo, PlannedStep, StorePathInfo, VerifyResult
+from .system.manager import OfflineManager, SystemdManager, SystemManager
 from .transport import Daemon
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 __all__ = [
     "ActivationDeferred",
+    "ActivationNotice",
+    "ActivationStep",
+    "OfflineManager",
+    "SystemGeneration",
+    "SystemManager",
+    "SystemMode",
+    "SystemSettings",
+    "SystemdManager",
     "ActivationFailed",
     "KernelModuleLoaded",
     "KernelModuleUnloaded",

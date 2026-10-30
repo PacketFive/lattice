@@ -35,7 +35,7 @@ import pybonsai
 from pybonsai import FrozenMap, Host, PyBonsaiError
 
 from . import profiles
-from .derivation import BUILTIN_PROFILE, Derivation
+from .derivation import BUILTIN_PROFILE, BUILTIN_SYSTEM, Derivation
 from .errors import ActivationFailed, EvaluationFailed, StoreError
 from .events import EvaluationFinished, EvaluationStarted, EventHandler, ProfileSwitched, emit
 from .kmod import KernelModules, LinuxModules
@@ -47,6 +47,8 @@ from .models import (
     PushResult,
     SlotState,
     SubstitutionResult,
+    SystemGeneration,
+    SystemMode,
 )
 from .sandbox import BackendStatus, OciConfig, make_spec, oci_config
 from .sandbox import backend_status as probe_backends
@@ -67,6 +69,14 @@ from .store import (
 )
 from .store.builder import direct_inputs
 from .store.combine import profile_manifest
+from .system import boot as boot_entries
+from .system.activate import BOOTED, Activation, running_system
+from .system.build import read_system
+from .system.config import config_host, read_config
+from .system.manager import OfflineManager, SystemdManager, SystemManager
+
+TEST_ROOT = "system/test"
+"""The root that keeps the system of ``switch_system(mode="test")``."""
 
 if TYPE_CHECKING:
     from .sandbox import Backend
@@ -80,6 +90,9 @@ class Lattice:
     backend for builds; None chooses the one the settings name when the
     first build needs it. ``kernel_modules`` loads and unloads the kernel
     modules of stacks; None uses the running Linux kernel.
+    ``system_manager`` starts units and mounts file systems for system
+    activation (RFC 0004); None uses systemd when ``settings.system.root``
+    is ``/`` and an OfflineManager otherwise.
 
     The store under ``settings.store.root`` is created by the first
     operation that writes to it. Operations that only read it raise
@@ -93,6 +106,7 @@ class Lattice:
         on_event: EventHandler | None = None,
         backend: Backend | None = None,
         kernel_modules: KernelModules | None = None,
+        system_manager: SystemManager | None = None,
     ) -> None:
         """Store the settings, event handler and backends. Nothing is read or created."""
         self.settings = settings if settings is not None else Settings()
@@ -101,6 +115,11 @@ class Lattice:
         self.kernel_modules = kernel_modules if kernel_modules is not None else LinuxModules()
         self.layout = StoreLayout(root=self.settings.store.root, stacks=self.settings.store.stacks)
         self._host: Host | None = None
+        if system_manager is None:
+            system_manager = (
+                SystemdManager() if self.settings.system.root == "/" else OfflineManager()
+            )
+        self.system_manager = system_manager
 
     def _get_host(self) -> Host:
         if self._host is None:
@@ -110,24 +129,30 @@ class Lattice:
     def evaluate(self, path: str | os.PathLike[str]) -> Evaluation:
         """Evaluate the PyBonsai file at ``path`` with the standard library. Phase 1.
 
-        Nothing is built. Raises EvaluationFailed if the file is rejected or
-        fails, and OSError if it cannot be read.
+        If the directory of ``path`` holds a ``config.pyb`` written by
+        Trellis, its ``options`` mapping is the name ``config`` (RFC 0004
+        section 5.2, Phase 10); otherwise ``config`` is empty. Nothing is
+        built. Raises EvaluationFailed if a file is rejected or fails, and
+        OSError if it cannot be read.
         """
         filename = os.fspath(path)
-        emit(self.on_event, EvaluationStarted(filename=filename))
-        start = time.perf_counter()
-        try:
-            names = pybonsai.evaluate_file(path, host=self._get_host())
-        except PyBonsaiError as error:
-            raise EvaluationFailed(error) from error
-        return self._finish(filename, names, start)
+        with open(filename, encoding="utf-8") as file:
+            source = file.read()
+        return self.evaluate_source(source, filename, read_config(filename))
 
-    def evaluate_source(self, source: str, filename: str = "<string>") -> Evaluation:
-        """Evaluate PyBonsai source text, as evaluate does for a file. Phase 1."""
+    def evaluate_source(
+        self, source: str, filename: str = "<string>", config_source: str | None = None
+    ) -> Evaluation:
+        """Evaluate PyBonsai source text, as evaluate does for a file. Phase 1.
+
+        ``config_source`` is the text of a ``config.pyb`` whose ``options``
+        become the name ``config``.
+        """
         emit(self.on_event, EvaluationStarted(filename=filename))
         start = time.perf_counter()
         try:
-            names = pybonsai.evaluate_source(source, filename, host=self._get_host())
+            host = self._get_host() if config_source is None else config_host(config_source)
+            names = pybonsai.evaluate_source(source, filename, host=host)
         except PyBonsaiError as error:
             raise EvaluationFailed(error) from error
         return self._finish(filename, names, start)
@@ -301,8 +326,18 @@ class Lattice:
         ActivationFailed if a kernel module step fails, leaving the
         previous generation current, and if a profile other than
         ``system`` assigns stacks.
+
+        A ``builtin:system`` derivation may only go to the ``system``
+        profile, and switching to one runs switch_system (Phase 10).
         """
         profiles.check_profile_name(profile)
+        if drv.builder == BUILTIN_SYSTEM:
+            if profile != profiles.SYSTEM:
+                raise ActivationFailed(f"a system can only be a {profiles.SYSTEM} generation")
+            system = self.switch_system(drv)
+            return Generation(
+                profile=profile, number=system.number, store_path=system.store_path, current=True
+            )
         if profile != profiles.SYSTEM and drv.builder == BUILTIN_PROFILE:
             if profile_manifest(drv).stacks:
                 raise ActivationFailed(f"only the {profiles.SYSTEM} profile may assign stacks")
@@ -339,22 +374,29 @@ class Lattice:
 
         ``generation`` defaults to the newest one older than the current
         generation. Activation is as for switch. Raises StoreError if the
-        generation does not exist.
+        generation does not exist. A ``system`` generation that holds a
+        whole system is activated as rollback_system does (Phase 10).
         """
         profiles.check_profile_name(profile)
         if not self.layout.exists():
             raise StoreError(f"no store at {self.layout.root}")
         with lock.profiles(self.layout):
-            if generation is None:
-                now = profiles.current(self.layout, profile)
-                earlier = [
-                    n for n in profiles.numbers(self.layout, profile) if now is None or n < now
-                ]
-                if not earlier:
-                    raise StoreError(f"profile {profile!r} has no earlier generation")
-                generation = earlier[-1]
+            generation = self._earlier(profile, generation)
             path = profiles.store_path(self.layout, profile, generation)
+            if profile == profiles.SYSTEM and read_system(self.layout, path) is not None:
+                self._activate_system(path, generation, "switch")
+                return Generation(profile=profile, number=generation, store_path=path, current=True)
             return self._make_current(profile, generation, path)
+
+    def _earlier(self, profile: str, generation: int | None) -> int:
+        """Return ``generation``, or the newest one older than the current generation."""
+        if generation is not None:
+            return generation
+        now = profiles.current(self.layout, profile)
+        earlier = [n for n in profiles.numbers(self.layout, profile) if now is None or n < now]
+        if not earlier:
+            raise StoreError(f"profile {profile!r} has no earlier generation")
+        return earlier[-1]
 
     def generations(self, profile: str) -> tuple[Generation, ...]:
         """Return every generation of ``profile``, oldest first. Phase 4."""
@@ -365,7 +407,9 @@ class Lattice:
         """Delete all but the newest ``keep`` generations and the current one. Phase 4.
 
         Their roots are removed, so the next collection can reclaim what
-        only they used. Returns the deleted generations.
+        only they used. For ``system``, their boot entries and the kernels
+        and initial RAM disks no other entry uses are removed too. Returns
+        the deleted generations.
         """
         profiles.check_profile_name(profile)
         if keep < 0:
@@ -388,6 +432,10 @@ class Lattice:
                         )
                     except StoreError:
                         pass
+                if profile == profiles.SYSTEM and deleted:
+                    boot_entries.remove_entries(
+                        self.settings.system.root, {g.number for g in deleted}
+                    )
                 return deleted
         finally:
             connection.close()
@@ -396,20 +444,148 @@ class Lattice:
         """Return every slot that is active or that the current system generation wants. Phase 4."""
         return profiles.states(self.layout)
 
-    def activate_boot(self) -> tuple[SlotState, ...]:
+    def activate_boot(self, system: str | None = None) -> tuple[SlotState, ...]:
         """Load the kernel modules and create the slots of the current system generation. Phase 4.
 
         Runs once at boot, before any service starts. Library and command
         only; the daemon does not offer it. Raises ActivationFailed after
         setting every slot if a module did not load.
+
+        ``system`` is the system the machine booted, which the ``init``
+        of a system passes (RFC 0004 section 9.2, Phase 10). It becomes
+        ``/run/booted-system`` and ``/run/current-system``, its ``/etc``
+        and accounts are written, and its stacks fill the slots.
         """
+        if system is not None:
+            check_store_path(system)
+            activation = Activation(
+                self.layout, self.settings.system.root, system, self.system_manager, self.on_event
+            )
+            activation.run("current", activation.booted)
+            activation.run("current", activation.current)
+            activation.run("etc", activation.etc)
+            activation.run("users", activation.users)
         if self.layout.exists():
             with lock.profiles(self.layout):
-                wanted = profiles.wanted(self.layout, profiles.system_environment(self.layout))
+                environment = system or profiles.system_environment(self.layout)
+                wanted = profiles.wanted(self.layout, environment)
                 profiles.boot(self.layout, self.kernel_modules, wanted, self.on_event)
         else:
             profiles.boot(self.layout, self.kernel_modules, {}, self.on_event)
         return profiles.states(self.layout)
+
+    def switch_system(self, drv: Derivation, mode: SystemMode = "switch") -> SystemGeneration:
+        """Build the system ``drv`` and activate it (RFC 0004 section 8). Phase 10.
+
+        ``switch`` adds a generation of the ``system`` profile with a boot
+        entry and activates it now. ``boot`` adds the generation and makes
+        it the default at the next boot without changing the running
+        machine. ``test`` activates the system now without a generation,
+        keeping it with the root ``system/test``; the next boot returns to
+        the current generation, and the result has number 0. Raises
+        ActivationFailed naming the step that failed; the new generation
+        then stays in the boot menu but is not current.
+        """
+        if drv.builder != BUILTIN_SYSTEM:
+            raise ActivationFailed(f"{drv.name} is not a system; use machine to declare one")
+        profile = profiles.SYSTEM
+        connection = database.connect(self.layout, create=True)
+        try:
+            # Shared from the build until the root exists, so collection cannot remove the output.
+            with lock.shared(self.layout):
+                path = self.build(drv).store_path
+                with lock.profiles(self.layout):
+                    if mode == "test":
+                        database.add_root(connection, TEST_ROOT, path)
+                        self._activate_system(path, None, mode)
+                        return self._system_generation(0, path)
+                    profiles.prepare(self.layout, profile)
+                    number = max(profiles.numbers(self.layout, profile), default=0) + 1
+                    database.add_root(connection, profiles.root_name(profile, number), path)
+                    profiles.replace_link(profiles.link_path(self.layout, profile, number), path)
+                    self._activate_system(path, number, mode)
+                    return self._system_generation(number, path)
+        finally:
+            connection.close()
+
+    def rollback_system(self, generation: int | None = None) -> SystemGeneration:
+        """Make an earlier system generation current and activate it. Phase 10.
+
+        ``generation`` defaults to the newest one older than the current
+        generation. Raises StoreError if it does not exist or does not
+        hold a whole system.
+        """
+        if not self.layout.exists():
+            raise StoreError(f"no store at {self.layout.root}")
+        with lock.profiles(self.layout):
+            number = self._earlier(profiles.SYSTEM, generation)
+            path = profiles.store_path(self.layout, profiles.SYSTEM, number)
+            if read_system(self.layout, path) is None:
+                raise StoreError(f"system generation {number} does not hold a whole system")
+            self._activate_system(path, number, "switch")
+            return self._system_generation(number, path)
+
+    def systems(self) -> tuple[SystemGeneration, ...]:
+        """Return the generations of ``system`` that hold a whole system, oldest first. Phase 10."""
+        if not self.layout.exists():
+            return ()
+        return tuple(
+            self._system_generation(g.number, g.store_path)
+            for g in profiles.generations(self.layout, profiles.SYSTEM)
+            if read_system(self.layout, g.store_path) is not None
+        )
+
+    def _system_generation(self, number: int, path: str) -> SystemGeneration:
+        root = self.settings.system.root
+        spec = read_system(self.layout, path)
+        entry = boot_entries.entry_path(root, number)
+        return SystemGeneration(
+            number=number,
+            store_path=path,
+            name=spec.name if spec is not None else "",
+            current=number > 0 and profiles.current(self.layout, profiles.SYSTEM) == number,
+            booted=running_system(root, BOOTED) == path,
+            boot_entry=entry if number > 0 and os.path.exists(entry) else None,
+        )
+
+    def _activate_system(self, path: str, number: int | None, mode: SystemMode) -> None:
+        """Run the activation steps of ``mode`` for the system at ``path``.
+
+        The caller holds the profiles lock. ``number`` is the generation,
+        or None in test mode.
+        """
+        root = self.settings.system.root
+        activation = Activation(self.layout, root, path, self.system_manager, self.on_event)
+
+        def write_entry() -> None:
+            if number is not None:
+                boot_entries.write_entry(self.layout, root, number, path, activation.spec)
+
+        def move_slots() -> None:
+            wanted = profiles.wanted(self.layout, path)
+            profiles.activate(self.layout, self.kernel_modules, wanted, self.on_event)
+
+        if number is not None:
+            activation.run("boot entry", write_entry)
+        if mode != "boot":
+            activation.run("etc", activation.etc)
+            activation.run("users", activation.users)
+            activation.run("file systems", activation.file_systems)
+            activation.run("slots", move_slots)
+            activation.run("units", activation.units)
+            activation.run("current", activation.current)
+        if number is None:
+            return
+        link = profiles.link_path(self.layout, profiles.SYSTEM, number)
+        profiles.replace_link(
+            profiles.link_path(self.layout, profiles.SYSTEM), os.path.basename(link)
+        )
+        if os.path.exists(boot_entries.entry_path(root, number)):
+            boot_entries.set_default(root, number)
+        emit(
+            self.on_event,
+            ProfileSwitched(profile=profiles.SYSTEM, number=number, store_path=path),
+        )
 
     def substitute(self, path: str, shallow: bool = False) -> SubstitutionResult:
         """Fetch ``path`` and its missing references from the caches (section 14.1). Phase 5.

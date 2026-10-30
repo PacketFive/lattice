@@ -64,13 +64,24 @@ store paths, and are recorded in the provenance of every path built on
 that backend. `lattice check --backend B` rebuilds a path on backend B to
 confirm the outputs match those of the backend that built it.
 
+Phase 10: system configuration (RFC 0004). `machine` and the records
+`user`, `group`, `file_system`, `service` and `etc_file` describe a whole
+machine, which `builtin:system` builds into one store path. `lattice
+switch` makes it a generation of the `system` profile with a
+systemd-boot entry and activates it: `/etc` through `/etc/static`,
+`passwd`, `group` and `shadow`, new mounts, slots and systemd units.
+`--boot` defers it to the next boot and `--test` activates it without a
+generation. A `config.pyb` written by Trellis next to the description is
+read as `config`. With a delegated cgroup, builds also get memory, CPU
+and process limits.
+
 ## Install
 
 ```sh
 pip install pyrixos-lattice            # or 'pyrixos-lattice[config]' for lattice config
 ```
 
-Lattice is at 0.9 until PyrixOS 1.0, so its interface may still change
+Lattice stays below 1.0 until PyrixOS 1.0, so its interface may still change
 between minor versions. To work on Lattice itself, next to checkouts of
 the components:
 
@@ -140,6 +151,34 @@ lattice slots                                 # active stack, and the next boot'
 lattice activate-boot                         # run once at boot, before services
 ```
 
+A whole machine (RFC 0004), as an admin:
+
+```sh
+lattice switch                                # /etc/pyrixos/system.pyb, name "system"
+lattice switch --test my-system.pyb           # activate now, no generation or boot entry
+lattice switch --boot                         # the next boot uses it
+lattice systems                               # generations, "(current, booted)"
+lattice rollback --profile system             # back to the previous system
+```
+
+```python
+# /etc/pyrixos/system.pyb
+alice = user(name="alice", groups=["wheel"], password_file="/etc/pyrixos/secrets/alice.hash")
+system = machine(
+    name="lab-1",
+    kernel=linux,
+    initrd=linux_initrd,
+    packages=[bash, coreutils, python3] + ([htop] if config.get("TOOLS_HTOP", False) else []),
+    users=[alice],
+    groups=[group(name="wheel", gid=10)],
+    file_systems=[file_system(mount_point="/", device="/dev/disk/by-label/root", fs_type="ext4")],
+    services=[service(name="web", exec_start=f"{python3}/bin/python3 -m http.server")],
+)
+```
+
+Progress is printed as `activating: <step>`, and changes that wait for
+the next boot as `note: ...`.
+
 Binary caches:
 
 ```sh
@@ -205,6 +244,9 @@ stacks = "/run/lattice/stacks"  # slot symlinks, this by default
 timeout = 3600
 max_silent_time = 600
 max_open_files = 1024
+max_memory_mib = 8192 # these three need a delegated cgroup (Delegate=yes)
+max_cpu = 4.0
+max_processes = 4096
 runtime = "crun"      # OCI runtime; the first of crun, runc, youki by default
 
 [sandbox.microvm]
@@ -214,6 +256,10 @@ init = "/lattice/store/<hash>-cloche-guest-init/init"
 memory_mib = 2048
 cpus = 2
 output_mib = 4096     # size of the output device, which caps the outputs
+
+[system]
+description = "/etc/pyrixos/system.pyb"  # what lattice switch uses without FILE
+root = "/"            # a mounted target when an installer prepares a disk
 
 [cache]
 secret_key_file = "/etc/lattice/cache.key"  # on a machine that pushes
@@ -267,8 +313,9 @@ Through the daemon, from the same machine or another one:
 from lattice import Client
 
 local = Client()  # unix:///run/lattice/daemon.sock
-remote = Client("https://builder.example:7420", ca_file="ca.pem",
-                cert_file="me.pem", key_file="me.key")
+remote = Client(
+    "https://builder.example:7420", ca_file="ca.pem", cert_file="me.pem", key_file="me.key"
+)
 result = remote.evaluate("hello.pyb")
 ```
 
@@ -321,6 +368,7 @@ garbage, push and change any root or profile. RFC 0001 section 6.2 is the specif
 | `sandbox.py` | Turns a derivation into a Cloche command, chooses and configures the backend, and runs the build in the sandbox |
 | `store/` | The store: layout, locks, content hashes, reference scanning, the database, publication, downloads, the builder and the garbage collector |
 | `procscan.py` | Finds the store paths that running processes use |
+| `system/` | System configuration: the records, `builtin:system`, accounts, boot entries, activation and the system manager |
 
 ## License
 

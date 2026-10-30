@@ -142,7 +142,10 @@ def build_command(
 
 
 def _limits(settings: SandboxSettings) -> cloche.Limits:
-    return cloche.Limits.model_validate(settings.model_dump(exclude={"runtime", "microvm"}))
+    fields = settings.model_dump(exclude={"runtime", "microvm", "max_memory_mib"})
+    if settings.max_memory_mib is not None:
+        fields["max_memory"] = settings.max_memory_mib << 20
+    return cloche.Limits.model_validate(fields)
 
 
 def make_spec(
@@ -253,10 +256,19 @@ def select_backend(
 def backend_status(
     sandbox: SandboxSettings | None = None, host_store: str = STORE_DIR
 ) -> tuple[BackendStatus, ...]:
-    """Report which sandbox backends can run on this machine (section 9.7)."""
+    """Report which sandbox backends can run on this machine (section 9.7).
+
+    A last entry named ``cgroups`` says whether builds get their own
+    cgroup, which the memory, CPU and process limits need (section 9.4).
+    """
     sandbox = sandbox or SandboxSettings()
-    return cloche.backend_status(
+    statuses = cloche.backend_status(
         runtime=sandbox.runtime, microvm=microvm_config(sandbox, host_store)
+    )
+    cgroup = cloche.cgroup_status()
+    return (
+        *statuses,
+        BackendStatus(name="cgroups", available=cgroup.available, reason=cgroup.reason),
     )
 
 

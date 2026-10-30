@@ -45,6 +45,8 @@ from .models import (
     PushResult,
     SlotState,
     SubstitutionResult,
+    SystemGeneration,
+    SystemMode,
     parse,
 )
 from .protocol import (
@@ -63,16 +65,19 @@ from .protocol import (
     ProfileParams,
     PushParams,
     RollbackParams,
+    RollbackSystemParams,
     RootNameParams,
     RootParams,
     ServerInfo,
     SubstituteParams,
     SwitchParams,
+    SwitchSystemParams,
     raise_error,
 )
 from .sandbox import BackendStatus, OciConfig
 from .settings import DEFAULT_SOCKET, SandboxBackend
 from .store import BuildPlan, GCRootInfo, StorePathInfo, VerifyResult
+from .system.config import read_config
 
 DEFAULT_URL = f"unix://{DEFAULT_SOCKET}"
 
@@ -81,6 +86,7 @@ _BACKEND_STATUSES = TypeAdapter(tuple[BackendStatus, ...])
 _ROOTS = TypeAdapter(tuple[GCRootInfo, ...])
 _GENERATIONS = TypeAdapter(tuple[Generation, ...])
 _SLOTS = TypeAdapter(tuple[SlotState, ...])
+_SYSTEMS = TypeAdapter(tuple[SystemGeneration, ...])
 
 
 @runtime_checkable
@@ -91,8 +97,10 @@ class LatticeAPI(Protocol):
         """Evaluate the PyBonsai file at ``path``."""
         ...
 
-    def evaluate_source(self, source: str, filename: str = "<string>") -> Evaluation:
-        """Evaluate PyBonsai source text."""
+    def evaluate_source(
+        self, source: str, filename: str = "<string>", config_source: str | None = None
+    ) -> Evaluation:
+        """Evaluate PyBonsai source text, with ``config`` from ``config_source`` if given."""
         ...
 
     def build(self, drv: Derivation) -> BuildResult:
@@ -157,6 +165,18 @@ class LatticeAPI(Protocol):
 
     def slots(self) -> tuple[SlotState, ...]:
         """Return the active and wanted stack of every slot."""
+        ...
+
+    def switch_system(self, drv: Derivation, mode: SystemMode = "switch") -> SystemGeneration:
+        """Build the system ``drv`` and activate it in ``mode``."""
+        ...
+
+    def rollback_system(self, generation: int | None = None) -> SystemGeneration:
+        """Make an earlier system generation current and activate it."""
+        ...
+
+    def systems(self) -> tuple[SystemGeneration, ...]:
+        """Return the system generations."""
         ...
 
     def substitute(self, path: str, shallow: bool = False) -> SubstitutionResult:
@@ -329,13 +349,18 @@ class Client:
         return self._result(ServerInfo, value)
 
     def evaluate(self, path: str | os.PathLike[str]) -> Evaluation:
-        """Read the file at ``path`` here and have the daemon evaluate its text."""
-        source = Path(path).read_text(encoding="utf-8")
-        return self.evaluate_source(source, os.fspath(path))
+        """Read the file at ``path`` here and have the daemon evaluate its text.
 
-    def evaluate_source(self, source: str, filename: str = "<string>") -> Evaluation:
+        The ``config.pyb`` next to it, if any, is read here and sent too.
+        """
+        source = Path(path).read_text(encoding="utf-8")
+        return self.evaluate_source(source, os.fspath(path), read_config(path))
+
+    def evaluate_source(
+        self, source: str, filename: str = "<string>", config_source: str | None = None
+    ) -> Evaluation:
         """Have the daemon evaluate PyBonsai source text."""
-        params = EvaluateSourceParams(source=source, filename=filename)
+        params = EvaluateSourceParams(source=source, filename=filename, config_source=config_source)
         return self._result(Evaluation, self._call("evaluate_source", params))
 
     def build(self, drv: Derivation) -> BuildResult:
@@ -422,6 +447,20 @@ class Client:
     def slots(self) -> tuple[SlotState, ...]:
         """Return the slots of the daemon's machine."""
         return self._tuple(_SLOTS, self._call("slots", NoParams()), "slots")
+
+    def switch_system(self, drv: Derivation, mode: SystemMode = "switch") -> SystemGeneration:
+        """Have the daemon build the system ``drv`` and activate it in ``mode``."""
+        params = SwitchSystemParams(derivation=drv, mode=mode)
+        return self._result(SystemGeneration, self._call("switch_system", params))
+
+    def rollback_system(self, generation: int | None = None) -> SystemGeneration:
+        """Have the daemon activate an earlier system generation."""
+        params = RollbackSystemParams(generation=generation)
+        return self._result(SystemGeneration, self._call("rollback_system", params))
+
+    def systems(self) -> tuple[SystemGeneration, ...]:
+        """Return the system generations of the daemon's machine."""
+        return self._tuple(_SYSTEMS, self._call("systems", NoParams()), "systems")
 
     def substitute(self, path: str, shallow: bool = False) -> SubstitutionResult:
         """Have the daemon fetch ``path`` from its caches."""

@@ -40,6 +40,8 @@ from lattice import (
     SandboxSettings,
     SlotState,
     SubstitutionResult,
+    SystemGeneration,
+    SystemMode,
 )
 from lattice.kmod import LoadedModule, read_info
 from lattice.procscan import ProcessUse
@@ -57,7 +59,11 @@ class FakeAPI:
     def evaluate(self, path: str | os.PathLike[str]) -> Evaluation:
         raise AssertionError("the daemon never evaluates a path")
 
-    def evaluate_source(self, source: str, filename: str = "<string>") -> Evaluation:
+    def evaluate_source(
+        self, source: str, filename: str = "<string>", config_source: str | None = None
+    ) -> Evaluation:
+        if config_source == "fail":
+            raise EvaluationFailed("config.pyb:1:1: rejected")
         if self.on_event is not None:
             self.on_event(EvaluationStarted(filename=filename))
         if source == "fail":
@@ -132,6 +138,24 @@ class FakeAPI:
             ()
             if keep
             else (Generation(profile=profile, number=1, store_path="/lattice/store/a-x"),)
+        )
+
+    def switch_system(self, drv: Derivation, mode: SystemMode = "switch") -> SystemGeneration:
+        number = 0 if mode == "test" else 3
+        return SystemGeneration(
+            number=number, store_path=drv.store_path, name=drv.name, current=mode == "switch"
+        )
+
+    def rollback_system(self, generation: int | None = None) -> SystemGeneration:
+        number = 1 if generation is None else generation
+        return SystemGeneration(
+            number=number, store_path="/lattice/store/a-x", name="host", current=True
+        )
+
+    def systems(self) -> tuple[SystemGeneration, ...]:
+        return (
+            SystemGeneration(number=1, store_path="/lattice/store/a-x", name="host", booted=True),
+            SystemGeneration(number=2, store_path="/lattice/store/b-y", name="host", current=True),
         )
 
     def slots(self) -> tuple[SlotState, ...]:

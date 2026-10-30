@@ -33,6 +33,7 @@ from ..derivation import (
     BUILTIN_FETCH_URL,
     BUILTIN_PROFILE,
     BUILTIN_STACK,
+    BUILTIN_SYSTEM,
     BUILTIN_UNPACK,
     STORE_DIR,
     Derivation,
@@ -42,6 +43,7 @@ from ..events import BuildFinished, BuildLog, BuildStarted, Event, EventHandler,
 from ..models import BuildResult, Model
 from ..sandbox import BuildRequest, guest_files, host_path, run_build, select_backend
 from ..settings import SandboxBackend, Settings, ShallowRules
+from ..system.build import build_system
 from . import database, lock
 from .combine import combine
 from .fetch import fetch
@@ -412,6 +414,8 @@ class Builder:
             return combine(self.layout, drv, os.path.join(work, "out")), None
         if drv.builder == BUILTIN_UNPACK:
             return unpack(self.layout, drv, os.path.join(work, "out")), None
+        if drv.builder == BUILTIN_SYSTEM:
+            return build_system(self.layout, drv, os.path.join(work, "out")), None
         name = drv.name
 
         def on_log(text: str) -> None:

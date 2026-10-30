@@ -32,6 +32,7 @@ DEFAULT_SOCKET = "/run/lattice/daemon.sock"
 DEFAULT_SETTINGS_PATH = "/etc/lattice/settings.toml"
 DEFAULT_STORE_ROOT = "/lattice"
 DEFAULT_STACKS = "/run/lattice/stacks"
+DEFAULT_DESCRIPTION = "/etc/pyrixos/system.pyb"
 
 
 def _settings_error(error: ValidationError) -> SettingsError:
@@ -154,8 +155,11 @@ class SandboxSettings(_SettingsModel):
     ``timeout`` ends a build that runs longer than that many seconds, and
     ``max_silent_time`` one that writes no log output for that many
     seconds. None means no limit. ``max_open_files`` is the builder's
-    ``RLIMIT_NOFILE``. None of these is part of a derivation, so changing
-    them changes no hash. ``runtime`` is the OCI runtime of the oci
+    ``RLIMIT_NOFILE``. ``max_memory_mib``, ``max_cpu`` (CPUs, such as
+    0.5) and ``max_processes`` limit each build through its own cgroup,
+    and apply only when Lattice runs in a delegated cgroup version 2
+    subtree; None means no limit. None of these is part of a derivation,
+    so changing them changes no hash. ``runtime`` is the OCI runtime of the oci
     backend, a name in PATH or an absolute path, and the first of crun,
     runc and youki when unset. ``microvm`` configures the microVM
     backend.
@@ -164,6 +168,9 @@ class SandboxSettings(_SettingsModel):
     timeout: int | None = Field(default=None, gt=0)
     max_silent_time: int | None = Field(default=None, gt=0)
     max_open_files: int = Field(default=1024, ge=64, le=1048576)
+    max_memory_mib: int | None = Field(default=None, ge=1)
+    max_cpu: float | None = Field(default=None, ge=0.01)
+    max_processes: int | None = Field(default=None, ge=8)
     runtime: str | None = Field(default=None, min_length=1)
     microvm: MicroVMSettings = MicroVMSettings()
 
@@ -277,6 +284,27 @@ class CacheSettings(_SettingsModel):
         return self
 
 
+class SystemSettings(_SettingsModel):
+    """Where system configuration (RFC 0004) reads its description and acts.
+
+    ``description`` is the system description ``lattice switch`` uses
+    without a file argument. ``root`` is the directory activation treats
+    as ``/``: the running machine by default, or a mounted target when an
+    installer prepares one, in which case services are not started and
+    file systems are not mounted.
+    """
+
+    description: str = DEFAULT_DESCRIPTION
+    root: str = "/"
+
+    @model_validator(mode="after")
+    def _check_paths(self) -> Self:
+        for name, value in (("description", self.description), ("root", self.root)):
+            if not os.path.isabs(value) or os.path.normpath(value) != value:
+                raise ValueError(f"system {name} must be a normalised absolute path, not {value!r}")
+        return self
+
+
 class Settings(_SettingsModel):
     """What one machine uses to build and fetch store paths.
 
@@ -287,7 +315,8 @@ class Settings(_SettingsModel):
     valid signed provenance (section 14.9). ``daemon`` is read only by
     ``lattice daemon``. ``sandbox`` holds the limits of every build and
     ``store`` the location of the store and ``cache`` how caches are
-    published and read.
+    published and read. ``system`` says where system configuration
+    reads its description and which root it activates.
     """
 
     sandbox_backend: SandboxBackend = "namespaces"
@@ -298,6 +327,7 @@ class Settings(_SettingsModel):
     store: StoreSettings = StoreSettings()
     daemon: DaemonSettings = DaemonSettings()
     cache: CacheSettings = CacheSettings()
+    system: SystemSettings = SystemSettings()
 
     @model_validator(mode="after")
     def _check_caches(self) -> Self:
@@ -315,7 +345,8 @@ class Settings(_SettingsModel):
         holds SandboxSettings, with ``[sandbox.microvm]`` for
         MicroVMSettings, the ``[store]`` table StoreSettings and the
         ``[daemon]`` table DaemonSettings and the ``[cache]`` table
-        CacheSettings, with ``[cache.shallow]`` for ShallowRules.
+        CacheSettings, with ``[cache.shallow]`` for ShallowRules, and
+        the ``[system]`` table SystemSettings.
         Grants are arrays of tables, written ``[[daemon.clients]]`` and
         ``[[daemon.tokens]]``. A key the model
         does not know is an error. A file that cannot be read, is not valid

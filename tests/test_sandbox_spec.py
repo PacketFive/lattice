@@ -10,6 +10,7 @@ import os
 import subprocess
 from pathlib import Path
 
+import cloche
 import pytest
 from cloche import FIXED_VARIABLES, Limits, Outcome, RunFailed, SandboxUnavailable
 from pybonsai import FrozenMap
@@ -23,9 +24,11 @@ from lattice import (
     Settings,
     SettingsError,
     cli,
+    sandbox,
 )
 from lattice.derivation import STORE_DIR, output_path
 from lattice.sandbox import (
+    BackendStatus,
     BuildRequest,
     SandboxSpec,
     build_command,
@@ -205,9 +208,22 @@ def failed_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[s
 def test_backend_status_lists_every_backend(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "run", failed_run)
     statuses = Lattice().backend_status()
-    assert [s.name for s in statuses] == ["namespaces", "oci", "microvm"]
+    assert [s.name for s in statuses] == ["namespaces", "oci", "microvm", "cgroups"]
     assert statuses[1].reason.startswith("unprivileged user namespaces do not work")
     assert statuses[2].reason == "no guest kernel and init are configured"
+
+
+def test_cgroup_limits_reach_cloche(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = SandboxSettings(max_memory_mib=256, max_cpu=0.5, max_processes=64)
+    limits = sandbox._limits(settings)
+    assert (limits.max_memory, limits.max_cpu, limits.max_processes) == (256 << 20, 0.5, 64)
+    assert sandbox._limits(SandboxSettings()).max_memory is None
+    monkeypatch.setattr(
+        cloche, "cgroup_status", lambda: cloche.CgroupStatus(available=False, reason="no")
+    )
+    assert sandbox.backend_status()[-1] == BackendStatus(
+        name="cgroups", available=False, reason="no"
+    )
 
 
 def test_errors_become_lattice_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

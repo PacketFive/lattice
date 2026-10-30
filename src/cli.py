@@ -14,18 +14,19 @@ The subcommands are::
     lattice [--daemon | --remote URL] add-root NAME PATH
     lattice [--daemon | --remote URL] remove-root NAME
     lattice [--daemon | --remote URL] gc
-    lattice [--daemon | --remote URL] switch [--profile P] FILE.pyb [NAME]
+    lattice [--daemon | --remote URL] switch [--profile P] [--boot | --test] [FILE.pyb [NAME]]
     lattice [--daemon | --remote URL] rollback [--profile P] [GENERATION]
     lattice [--daemon | --remote URL] generations [--profile P]
     lattice [--daemon | --remote URL] delete-generations [--profile P] --keep N
     lattice [--daemon | --remote URL] slots
+    lattice [--daemon | --remote URL] systems
     lattice [--daemon | --remote URL] backend-status
     lattice [--daemon | --remote URL] substitute [--shallow] PATH
     lattice [--daemon | --remote URL] materialise PATH
     lattice [--daemon | --remote URL] push --to URL PATH...
     lattice generate-key NAME FILE
     lattice config [ARGUMENTS...]
-    lattice activate-boot
+    lattice activate-boot [--system PATH]
     lattice daemon
 
 ``eval`` evaluates the file and prints every top-level derivation with its
@@ -43,12 +44,21 @@ the roots collection keeps, and ``gc`` collects garbage.
 
 ``switch`` builds the derivation and makes it the next generation of
 profile P, ``system`` by default, and ``rollback`` makes an earlier
-generation current again (RFC 0001 section 13). ``generations`` lists the
+generation current again (RFC 0001 section 13). When the derivation is a
+system declared with ``machine`` (RFC 0004), ``switch`` activates the whole
+system: ``--boot`` makes it the default from the next boot only, and
+``--test`` activates it now without a generation. Without FILE, ``switch``
+uses derivation ``system`` of the system description named in the
+settings, ``/etc/pyrixos/system.pyb`` by default. ``systems`` lists the
+system generations, marking the current and the booted one. ``generations`` lists the
 generations of P, marking the current one, and ``delete-generations``
 deletes all but the newest N and the current one. ``slots`` prints the
 active and wanted stack of each slot. ``activate-boot`` loads the kernel
 modules and creates the slots of the current system generation; it runs
-at boot and always uses the library, never a daemon.
+at boot and always uses the library, never a daemon. With ``--system``,
+as the ``init`` of a system runs it, it first links ``/run/booted-system``,
+``/run/current-system`` and ``/etc`` to that system and writes its
+accounts.
 
 ``backend-status`` prints whether each sandbox backend can run. ``daemon``
 runs the daemon of RFC 0001 section 6.2 until interrupted.
@@ -90,10 +100,12 @@ from collections.abc import Sequence
 
 from .api import Lattice
 from .client import DEFAULT_URL, Client, LatticeAPI
-from .derivation import Derivation, canonical_json
+from .derivation import BUILTIN_SYSTEM, Derivation, canonical_json
 from .errors import LatticeError
 from .events import (
     ActivationDeferred,
+    ActivationNotice,
+    ActivationStep,
     BuildLog,
     BuildStarted,
     CacheSkipped,
@@ -104,8 +116,8 @@ from .events import (
     SlotChanged,
     SubstitutionStarted,
 )
-from .models import Generation, SlotState
-from .settings import DEFAULT_SETTINGS_PATH, SANDBOX_BACKENDS, Settings
+from .models import Generation, SlotState, SystemGeneration, SystemMode
+from .settings import DEFAULT_DESCRIPTION, DEFAULT_SETTINGS_PATH, SANDBOX_BACKENDS, Settings
 from .transport import Daemon
 
 # The name of the variable that holds the token, not a token.
@@ -185,7 +197,11 @@ def build_parser() -> argparse.ArgumentParser:
     gc.set_defaults(handler=cmd_gc)
     switch = commands.add_parser("switch", help="build a derivation and make it current")
     _profile_argument(switch)
-    _derivation_arguments(switch)
+    modes = switch.add_mutually_exclusive_group()
+    modes.add_argument("--boot", action="store_true", help="activate a system at the next boot")
+    modes.add_argument("--test", action="store_true", help="activate a system until reboot")
+    switch.add_argument("file", nargs="?", help="PyBonsai file (the system description)")
+    switch.add_argument("name", nargs="?", help="derivation of the file")
     switch.set_defaults(handler=cmd_switch)
     rollback = commands.add_parser("rollback", help="make an earlier generation current")
     _profile_argument(rollback)
@@ -200,7 +216,10 @@ def build_parser() -> argparse.ArgumentParser:
     delete.set_defaults(handler=cmd_delete_generations)
     slots = commands.add_parser("slots", help="show the active and wanted stack of each slot")
     slots.set_defaults(handler=cmd_slots)
+    systems = commands.add_parser("systems", help="list the system generations")
+    systems.set_defaults(handler=cmd_systems)
     boot = commands.add_parser("activate-boot", help="load modules and create slots at boot")
+    boot.add_argument("--system", metavar="PATH", help="the system the machine booted")
     boot.set_defaults(handler=cmd_activate_boot)
     status = commands.add_parser("backend-status", help="show which sandbox backends can run")
     status.set_defaults(handler=cmd_backend_status)
@@ -254,6 +273,10 @@ def progress(event: Event) -> None:
     elif isinstance(event, BuildLog):
         sys.stderr.write(event.text)
         sys.stderr.flush()
+    elif isinstance(event, ActivationStep):
+        line = f"activating: {event.step}"
+    elif isinstance(event, ActivationNotice):
+        line = f"note: {event.text}"
     elif isinstance(event, ActivationDeferred):
         line = f"slot {event.slot} changes at the next boot: {event.reason}"
     elif isinstance(event, SlotChanged):
@@ -419,10 +442,42 @@ def _print_generation(generation: Generation) -> None:
     print(f"{generation.number} {generation.store_path}{mark}")
 
 
+def _print_system(system: SystemGeneration) -> None:
+    marks = [m for m, on in (("current", system.current), ("booted", system.booted)) if on]
+    mark = f" ({', '.join(marks)})" if marks else ""
+    print(f"{system.number} {system.name} {system.store_path}{mark}")
+
+
 def cmd_switch(args: argparse.Namespace) -> int:
-    """Build derivation ``args.name`` of ``args.file`` and make it current. Return 0."""
+    """Build derivation ``args.name`` of ``args.file`` and make it current. Return 0.
+
+    Without a file, the system description of the settings and its
+    derivation ``system`` are used. A system goes to switch_system in the
+    mode ``--boot`` or ``--test`` choose.
+    """
     api = make_api(args)
-    _print_generation(api.switch(args.profile, select(api, args.file, args.name)))
+    file, name = args.file, args.name
+    if file is None:
+        local = not args.daemon and args.remote is None
+        file = load_settings(args.settings).system.description if local else DEFAULT_DESCRIPTION
+        name = "system"
+    drv = select(api, file, name)
+    mode: SystemMode = "boot" if args.boot else "test" if args.test else "switch"
+    if drv.builder == BUILTIN_SYSTEM:
+        if args.profile != "system":
+            raise LatticeError("a system can only be switched in the system profile")
+        _print_system(api.switch_system(drv, mode))
+    elif mode != "switch":
+        raise LatticeError("--boot and --test apply only to a system")
+    else:
+        _print_generation(api.switch(args.profile, drv))
+    return 0
+
+
+def cmd_systems(args: argparse.Namespace) -> int:
+    """Print each system generation, marking the current and the booted one. Return 0."""
+    for system in make_api(args).systems():
+        _print_system(system)
     return 0
 
 
@@ -467,7 +522,8 @@ def cmd_activate_boot(args: argparse.Namespace) -> int:
     """
     if args.daemon or args.remote is not None or args.ca or args.cert or args.key:
         raise UsageError("lattice activate-boot takes no --daemon, --remote or TLS options")
-    _print_slots(Lattice(load_settings(args.settings), on_event=progress).activate_boot())
+    lattice = Lattice(load_settings(args.settings), on_event=progress)
+    _print_slots(lattice.activate_boot(args.system))
     return 0
 
 

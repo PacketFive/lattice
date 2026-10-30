@@ -26,9 +26,9 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "cloche>=1.0,<2",
+  "cloche>=1.1,<2",
   "cryptography>=42",
-  "pybonsai-lang>=1.0,<2",
+  "pybonsai-lang>=1.1,<2",
   "pydantic>=2.6,<3",
 ]
 
@@ -62,7 +62,7 @@ version = { attr = "lattice.__version__" }
 
 # The repository's src directory is the lattice package itself.
 [tool.setuptools]
-packages = ["lattice", "lattice.cache", "lattice.kmod", "lattice.profiles", "lattice.store"]
+packages = ["lattice", "lattice.cache", "lattice.kmod", "lattice.profiles", "lattice.store", "lattice.system"]
 package-dir = { lattice = "src" }
 
 # PEP 561 marker: the package ships its own type hints.

@@ -108,6 +108,31 @@ class Generation(Model):
     current: bool = False
 
 
+SystemMode = Literal["switch", "boot", "test"]
+"""How switch_system activates a system (RFC 0004 section 8.1).
+
+``switch`` activates it now and at every boot, ``boot`` only from the
+next boot, and ``test`` only now, without a new generation.
+"""
+
+
+class SystemGeneration(Model):
+    """One generation of the ``system`` profile that holds a whole system (RFC 0004).
+
+    ``current`` is true for the generation the profile link points at and
+    ``booted`` for the system the machine started with. ``boot_entry`` is
+    the path of the generation's boot loader entry under the system root,
+    or None if it has none.
+    """
+
+    number: int
+    store_path: str
+    name: str
+    current: bool = False
+    booted: bool = False
+    boot_entry: str | None = None
+
+
 class SlotState(Model):
     """One slot (section 13.2).
 
