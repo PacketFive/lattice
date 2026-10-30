@@ -76,6 +76,7 @@ from .models import (
     PushResult,
     Role,
     SlotState,
+    SourceFile,
     SubstitutionResult,
     SystemGeneration,
     SystemMode,
@@ -100,7 +101,7 @@ from .store import BuildPlan, GCRootInfo, PlannedStep, StorePathInfo, VerifyResu
 from .system.manager import OfflineManager, SystemdManager, SystemManager
 from .transport import Daemon
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 __all__ = [
     "ActivationDeferred",
@@ -174,6 +175,7 @@ __all__ = [
     "PathPushed",
     "PushResult",
     "ShallowRules",
+    "SourceFile",
     "SubstitutionFinished",
     "SubstitutionResult",
     "SubstitutionStarted",

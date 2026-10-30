@@ -74,6 +74,12 @@ def test_evaluate_reads_file_on_client(unix_daemon: Daemon, tmp_path: Path) -> N
     path = tmp_path / "a.pyb"
     path.write_text("x", encoding="utf-8")
     assert local(unix_daemon).evaluate(path).filename == str(path)
+    pkgs = tmp_path / "pkgs"
+    pkgs.mkdir()
+    (pkgs / "10-b.pyb").write_text("b = 2\n")
+    (pkgs / "00-a.pyb").write_text("a = 1\n")
+    evaluation = local(unix_daemon).evaluate(path, pkgs)
+    assert evaluation.filename == f"{path} {pkgs / '00-a.pyb'} {pkgs / '10-b.pyb'}"
 
 
 def test_errors_keep_their_class(unix_daemon: Daemon) -> None:

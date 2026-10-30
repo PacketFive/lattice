@@ -28,7 +28,7 @@ classifiers = [
 dependencies = [
   "cloche>=1.1,<2",
   "cryptography>=42",
-  "pybonsai-lang>=1.1,<2",
+  "pybonsai-lang>=1.2,<2",
   "pydantic>=2.6,<3",
 ]
 

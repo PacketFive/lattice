@@ -33,6 +33,7 @@ DEFAULT_SETTINGS_PATH = "/etc/lattice/settings.toml"
 DEFAULT_STORE_ROOT = "/lattice"
 DEFAULT_STACKS = "/run/lattice/stacks"
 DEFAULT_DESCRIPTION = "/etc/pyrixos/system.pyb"
+DEFAULT_PACKAGE_SET = "/etc/pyrixos/pkgs"
 
 
 def _settings_error(error: ValidationError) -> SettingsError:
@@ -288,18 +289,26 @@ class SystemSettings(_SettingsModel):
     """Where system configuration (RFC 0004) reads its description and acts.
 
     ``description`` is the system description ``lattice switch`` uses
-    without a file argument. ``root`` is the directory activation treats
+    without a file argument, and ``package_set`` the package set
+    directory (RFC 0005 section 5.2) it evaluates a system description
+    with when that directory exists. ``root`` is the directory activation treats
     as ``/``: the running machine by default, or a mounted target when an
     installer prepares one, in which case services are not started and
     file systems are not mounted.
     """
 
     description: str = DEFAULT_DESCRIPTION
+    package_set: str = DEFAULT_PACKAGE_SET
     root: str = "/"
 
     @model_validator(mode="after")
     def _check_paths(self) -> Self:
-        for name, value in (("description", self.description), ("root", self.root)):
+        paths = (
+            ("description", self.description),
+            ("package_set", self.package_set),
+            ("root", self.root),
+        )
+        for name, value in paths:
             if not os.path.isabs(value) or os.path.normpath(value) != value:
                 raise ValueError(f"system {name} must be a normalised absolute path, not {value!r}")
         return self

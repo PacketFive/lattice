@@ -21,13 +21,14 @@ from __future__ import annotations
 import posixpath
 import re
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import partial
 
 from pybonsai import Builtin, FrozenMap, Host, make_host
 from pydantic import ValidationError
 
 from .derivation import (
+    BUILTIN_CLOSURE,
     BUILTIN_FETCH_URL,
     BUILTIN_PROFILE,
     BUILTIN_STACK,
@@ -61,14 +62,16 @@ _SLOT = re.compile(r"[A-Za-z0-9_+-][A-Za-z0-9._+-]*")
 FETCH_SCHEMES: frozenset[str] = frozenset({"https", "http"})
 
 
-def build_host(config: FrozenMap | None = None) -> Host:
+def build_host(config: FrozenMap | None = None, extra: Mapping[str, object] | None = None) -> Host:
     """Return the Host Lattice evaluates every file with.
 
     Calls pybonsai.make_host with the prelude included, the functions
     below as Builtins under their RFC names, ``config`` as the read-only
     name ``config`` (RFC 0004 section 5.2), and
     ``{Derivation: DERIVATION_ATTRIBUTES}`` as host types. ``machine``
-    records ``config`` in the system it declares.
+    records ``config`` in the system it declares. ``extra`` adds the
+    names of a package set (RFC 0005 section 5.2); they cannot replace a
+    standard library name.
     """
     config = config if config is not None else FrozenMap()
     functions: dict[str, Callable[..., object]] = {
@@ -77,6 +80,7 @@ def build_host(config: FrozenMap | None = None) -> Host:
         "stack": stack,
         "profile": profile,
         "unpack": unpack,
+        "closure": closure,
         "machine": partial(machine, config=config),
         "user": user,
         "group": group,
@@ -86,6 +90,10 @@ def build_host(config: FrozenMap | None = None) -> Host:
     }
     names: dict[str, object] = {name: Builtin(name, impl) for name, impl in functions.items()}
     names["config"] = config
+    for name, value in (extra or {}).items():
+        if name in names:
+            raise ValueError(f"{name} is a standard library name")
+        names[name] = value
     return make_host(names=names, types={Derivation: DERIVATION_ATTRIBUTES})
 
 
@@ -152,6 +160,23 @@ def unpack(archive: Derivation) -> Derivation:
         name=unpacked_name(archive.name),
         builder=BUILTIN_UNPACK,
         env=FrozenMap({"archive": archive}),
+    )
+
+
+def closure(of: Derivation) -> Derivation:
+    """Declare the list of the closure of ``of`` (RFC 0005 section 8.1).
+
+    The output holds ``paths``, every store path of the closure of the
+    outputs of ``of`` in sorted order, and ``registration.json``, which
+    lets the first boot of an image register them. Lattice writes both
+    itself after building ``of``.
+    """
+    if type(of) is not Derivation:
+        raise TypeError("closure needs a derivation")
+    return derivation(
+        name=f"{of.name}-closure",
+        builder=BUILTIN_CLOSURE,
+        env=FrozenMap({"of": of}),
     )
 
 

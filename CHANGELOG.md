@@ -7,6 +7,38 @@ PyrixOS 1.0.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-31
+
+The first part of Phase 11 of the PyrixOS development plan, package set
+and images (RFC 0005).
+
+### Added
+
+- Package sets: a directory of `.pyb` layers evaluated in the byte order
+  of their names, each with the public names of the layers before it.
+  A layer that repeats a name of an earlier layer or of the standard
+  library fails, and names starting with `_` stay in their layer.
+  `Lattice.evaluate` and `Client.evaluate` take `package_set`, and
+  `evaluate_source` takes the layers as `SourceFile` values, which a
+  client sends to the daemon. The layers of the last set are evaluated
+  once for several files.
+- `--package-set DIR` for `eval`, `build`, `check`, `plan`,
+  `sandbox-config` and `switch`, and the `[system]` setting
+  `package_set`, by default `/etc/pyrixos/pkgs`, which `lattice switch`
+  uses when the directory exists.
+- The standard library function `closure` and the builder
+  `builtin:closure`, which write `paths` and `registration.json` for the
+  closure of a derivation.
+- `Lattice.export_registration` and `lattice export-registration PATH...`.
+- `lattice activate-boot` registers the paths of
+  `<store root>/var/registration.json` in an empty store database after
+  hashing each of them again, adds a root for each system generation and
+  removes the file.
+
+### Changed
+
+- Requires PyBonsai 1.2.
+
 ## [0.11.0] - 2026-10-30
 
 Phase 10 of the PyrixOS development plan, system configuration

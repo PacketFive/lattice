@@ -28,7 +28,7 @@ import os
 import socket
 import ssl
 import urllib.parse
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
@@ -44,11 +44,13 @@ from .models import (
     Generation,
     PushResult,
     SlotState,
+    SourceFile,
     SubstitutionResult,
     SystemGeneration,
     SystemMode,
     parse,
 )
+from .pkgset import read_package_set
 from .protocol import (
     EVENT_METHOD,
     INFO_PATH,
@@ -93,14 +95,22 @@ _SYSTEMS = TypeAdapter(tuple[SystemGeneration, ...])
 class LatticeAPI(Protocol):
     """The operations Lattice and Client both provide (section 6.1)."""
 
-    def evaluate(self, path: str | os.PathLike[str]) -> Evaluation:
-        """Evaluate the PyBonsai file at ``path``."""
+    def evaluate(
+        self,
+        path: str | os.PathLike[str],
+        package_set: str | os.PathLike[str] | None = None,
+    ) -> Evaluation:
+        """Evaluate the PyBonsai file at ``path``, with the package set in ``package_set``."""
         ...
 
     def evaluate_source(
-        self, source: str, filename: str = "<string>", config_source: str | None = None
+        self,
+        source: str,
+        filename: str = "<string>",
+        config_source: str | None = None,
+        package_set: Sequence[SourceFile] | None = None,
     ) -> Evaluation:
-        """Evaluate PyBonsai source text, with ``config`` from ``config_source`` if given."""
+        """Evaluate PyBonsai source text, with ``config`` and package set layers if given."""
         ...
 
     def build(self, drv: Derivation) -> BuildResult:
@@ -348,19 +358,34 @@ class Client:
             connection.close()
         return self._result(ServerInfo, value)
 
-    def evaluate(self, path: str | os.PathLike[str]) -> Evaluation:
+    def evaluate(
+        self,
+        path: str | os.PathLike[str],
+        package_set: str | os.PathLike[str] | None = None,
+    ) -> Evaluation:
         """Read the file at ``path`` here and have the daemon evaluate its text.
 
-        The ``config.pyb`` next to it, if any, is read here and sent too.
+        The ``config.pyb`` next to it, if any, and the layers of
+        ``package_set`` are read here and sent too.
         """
         source = Path(path).read_text(encoding="utf-8")
-        return self.evaluate_source(source, os.fspath(path), read_config(path))
+        layers = None if package_set is None else read_package_set(package_set)
+        return self.evaluate_source(source, os.fspath(path), read_config(path), layers)
 
     def evaluate_source(
-        self, source: str, filename: str = "<string>", config_source: str | None = None
+        self,
+        source: str,
+        filename: str = "<string>",
+        config_source: str | None = None,
+        package_set: Sequence[SourceFile] | None = None,
     ) -> Evaluation:
         """Have the daemon evaluate PyBonsai source text."""
-        params = EvaluateSourceParams(source=source, filename=filename, config_source=config_source)
+        params = EvaluateSourceParams(
+            source=source,
+            filename=filename,
+            config_source=config_source,
+            package_set=None if package_set is None else tuple(package_set),
+        )
         return self._result(Evaluation, self._call("evaluate_source", params))
 
     def build(self, drv: Derivation) -> BuildResult:

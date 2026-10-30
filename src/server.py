@@ -95,7 +95,7 @@ METHODS: dict[str, Method] = {
     "evaluate_source": Method(
         EvaluateSourceParams,
         Role.USER,
-        lambda api, p: api.evaluate_source(p.source, p.filename, p.config_source),
+        lambda api, p: api.evaluate_source(p.source, p.filename, p.config_source, p.package_set),
     ),
     "build": Method(DerivationParams, Role.USER, lambda api, p: api.build(p.derivation)),
     "check": Method(CheckParams, Role.USER, lambda api, p: api.check(p.derivation, p.backend)),

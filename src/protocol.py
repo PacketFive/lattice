@@ -32,7 +32,7 @@ from . import errors
 from .derivation import Derivation
 from .errors import LatticeError
 from .events import Event
-from .models import Model, SystemMode
+from .models import Model, SourceFile, SystemMode
 from .settings import SandboxBackend
 
 JSONRPC_VERSION = "2.0"
@@ -117,12 +117,15 @@ class EvaluateSourceParams(Model):
 
     The daemon never reads files named by a caller. Client.evaluate reads
     the file itself and sends its text here, with the text of the
-    ``config.pyb`` next to it in ``config_source`` (RFC 0004 section 5.2).
+    ``config.pyb`` next to it in ``config_source`` (RFC 0004 section 5.2)
+    and the layers of a package set in ``package_set`` (RFC 0005 section
+    5.2).
     """
 
     source: str
     filename: str = "<string>"
     config_source: str | None = None
+    package_set: tuple[SourceFile, ...] | None = None
 
 
 class DerivationParams(Model):

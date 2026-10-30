@@ -3,18 +3,20 @@
 
 The subcommands are::
 
-    lattice [--daemon | --remote URL] eval FILE.pyb
-    lattice [--daemon | --remote URL] build [--check [--backend B]] FILE.pyb [NAME]
-    lattice [--daemon | --remote URL] check [--backend B] FILE.pyb [NAME]
-    lattice [--daemon | --remote URL] plan FILE.pyb [NAME]
-    lattice [--daemon | --remote URL] sandbox-config FILE.pyb [NAME]
+    lattice [--daemon | --remote URL] eval [--package-set DIR] FILE.pyb
+    lattice [--daemon | --remote URL] build [--check [--backend B]] [--package-set DIR]
+        FILE.pyb [NAME]
+    lattice [--daemon | --remote URL] check [--backend B] [--package-set DIR] FILE.pyb [NAME]
+    lattice [--daemon | --remote URL] plan [--package-set DIR] FILE.pyb [NAME]
+    lattice [--daemon | --remote URL] sandbox-config [--package-set DIR] FILE.pyb [NAME]
     lattice [--daemon | --remote URL] path-info PATH
     lattice [--daemon | --remote URL] verify PATH
     lattice [--daemon | --remote URL] roots
     lattice [--daemon | --remote URL] add-root NAME PATH
     lattice [--daemon | --remote URL] remove-root NAME
     lattice [--daemon | --remote URL] gc
-    lattice [--daemon | --remote URL] switch [--profile P] [--boot | --test] [FILE.pyb [NAME]]
+    lattice [--daemon | --remote URL] switch [--profile P] [--boot | --test] [--package-set DIR]
+        [FILE.pyb [NAME]]
     lattice [--daemon | --remote URL] rollback [--profile P] [GENERATION]
     lattice [--daemon | --remote URL] generations [--profile P]
     lattice [--daemon | --remote URL] delete-generations [--profile P] --keep N
@@ -27,6 +29,7 @@ The subcommands are::
     lattice generate-key NAME FILE
     lattice config [ARGUMENTS...]
     lattice activate-boot [--system PATH]
+    lattice export-registration PATH...
     lattice daemon
 
 ``eval`` evaluates the file and prints every top-level derivation with its
@@ -40,7 +43,9 @@ paths, and ``build --check`` and ``check`` build it again and compare
 would build it. ``path-info`` prints what the store database
 records about PATH, and ``verify`` hashes PATH again and exits with 1 if
 it changed. ``roots``, ``add-root`` and ``remove-root`` list and change
-the roots collection keeps, and ``gc`` collects garbage.
+the roots collection keeps, and ``gc`` collects garbage. With
+``--package-set``, a file also sees the public names of the package set
+in DIR (RFC 0005 section 5.2).
 
 ``switch`` builds the derivation and makes it the next generation of
 profile P, ``system`` by default, and ``rollback`` makes an earlier
@@ -49,7 +54,10 @@ system declared with ``machine`` (RFC 0004), ``switch`` activates the whole
 system: ``--boot`` makes it the default from the next boot only, and
 ``--test`` activates it now without a generation. Without FILE, ``switch``
 uses derivation ``system`` of the system description named in the
-settings, ``/etc/pyrixos/system.pyb`` by default. ``systems`` lists the
+settings, ``/etc/pyrixos/system.pyb`` by default. Without
+``--package-set``, ``switch`` evaluates the file with the package set of
+the settings, ``/etc/pyrixos/pkgs`` by default, when that directory
+exists. ``systems`` lists the
 system generations, marking the current and the booted one. ``generations`` lists the
 generations of P, marking the current one, and ``delete-generations``
 deletes all but the newest N and the current one. ``slots`` prints the
@@ -58,7 +66,10 @@ modules and creates the slots of the current system generation; it runs
 at boot and always uses the library, never a daemon. With ``--system``,
 as the ``init`` of a system runs it, it first links ``/run/booted-system``,
 ``/run/current-system`` and ``/etc`` to that system and writes its
-accounts.
+accounts. Before that, on the first boot of a disk image, it registers
+the store paths listed in ``registration.json`` (RFC 0005 section 8.2).
+``export-registration`` prints that file for the closure of PATH, using
+the library like ``activate-boot``.
 
 ``backend-status`` prints whether each sandbox backend can run. ``daemon``
 runs the daemon of RFC 0001 section 6.2 until interrupted.
@@ -117,7 +128,7 @@ from .events import (
     SubstitutionStarted,
 )
 from .models import Generation, SlotState, SystemGeneration, SystemMode
-from .settings import DEFAULT_DESCRIPTION, DEFAULT_SETTINGS_PATH, SANDBOX_BACKENDS, Settings
+from .settings import DEFAULT_SETTINGS_PATH, SANDBOX_BACKENDS, Settings, SystemSettings
 from .transport import Daemon
 
 # The name of the variable that holds the token, not a token.
@@ -160,6 +171,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
     evaluate = commands.add_parser("eval", help="evaluate a file and print its derivations")
     evaluate.add_argument("file", help="PyBonsai file to evaluate")
+    _package_set_argument(evaluate)
     evaluate.set_defaults(handler=cmd_eval)
     build = commands.add_parser("build", help="build a derivation and print its outputs")
     _derivation_arguments(build)
@@ -202,6 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
     modes.add_argument("--test", action="store_true", help="activate a system until reboot")
     switch.add_argument("file", nargs="?", help="PyBonsai file (the system description)")
     switch.add_argument("name", nargs="?", help="derivation of the file")
+    _package_set_argument(switch)
     switch.set_defaults(handler=cmd_switch)
     rollback = commands.add_parser("rollback", help="make an earlier generation current")
     _profile_argument(rollback)
@@ -221,6 +234,11 @@ def build_parser() -> argparse.ArgumentParser:
     boot = commands.add_parser("activate-boot", help="load modules and create slots at boot")
     boot.add_argument("--system", metavar="PATH", help="the system the machine booted")
     boot.set_defaults(handler=cmd_activate_boot)
+    export = commands.add_parser(
+        "export-registration", help="print registration.json for the closure of store paths"
+    )
+    export.add_argument("paths", nargs="+", metavar="PATH", help="store path")
+    export.set_defaults(handler=cmd_export_registration)
     status = commands.add_parser("backend-status", help="show which sandbox backends can run")
     status.set_defaults(handler=cmd_backend_status)
     substitute = commands.add_parser("substitute", help="fetch a store path from the caches")
@@ -259,6 +277,13 @@ def _backend_argument(parser: argparse.ArgumentParser) -> None:
 def _derivation_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("file", help="PyBonsai file to evaluate")
     parser.add_argument("name", nargs="?", help="derivation of the file")
+    _package_set_argument(parser)
+
+
+def _package_set_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--package-set", metavar="DIR", help="evaluate with the package set in this directory"
+    )
 
 
 def _profile_argument(parser: argparse.ArgumentParser) -> None:
@@ -327,19 +352,21 @@ def cmd_eval(args: argparse.Namespace) -> int:
     ``<store path> <canonical JSON>``. Return 0 on success. On a
     LatticeError or OSError main prints the error to stderr and returns 1.
     """
-    evaluation = make_api(args).evaluate(args.file)
+    evaluation = make_api(args).evaluate(args.file, args.package_set)
     for drv in evaluation.derivations.values():
         print(drv.store_path, canonical_json(drv).decode())
     return 0
 
 
-def select(api: LatticeAPI, file: str, name: str | None) -> Derivation:
-    """Evaluate ``file`` and return its derivation ``name``.
+def select(
+    api: LatticeAPI, file: str, name: str | None, package_set: str | None = None
+) -> Derivation:
+    """Evaluate ``file`` with ``package_set`` and return its derivation ``name``.
 
     The name may be None when the file defines one derivation. An unknown
     or missing name is a LatticeError.
     """
-    derivations = api.evaluate(file).derivations
+    derivations = api.evaluate(file, package_set).derivations
     if name is None:
         if len(derivations) != 1:
             names = ", ".join(derivations) or "none"
@@ -360,7 +387,7 @@ def cmd_build(args: argparse.Namespace) -> int:
     if args.backend is not None:
         raise LatticeError("--backend applies only with --check")
     api = make_api(args)
-    result = api.build(select(api, args.file, args.name))
+    result = api.build(select(api, args.file, args.name, args.package_set))
     for path in result.outputs.values():
         print(path)
     return 0
@@ -369,7 +396,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 def cmd_check(args: argparse.Namespace) -> int:
     """Rebuild derivation ``args.name`` of ``args.file`` and compare. Return 0 if the same."""
     api = make_api(args)
-    result = api.check(select(api, args.file, args.name), args.backend)
+    result = api.check(select(api, args.file, args.name, args.package_set), args.backend)
     print(f"{result.store_path}: rebuilt with the same contents")
     return 0
 
@@ -377,7 +404,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 def cmd_plan(args: argparse.Namespace) -> int:
     """Print one line per step of the build: what happens to it and its store path."""
     api = make_api(args)
-    for step in api.plan(select(api, args.file, args.name)).steps:
+    for step in api.plan(select(api, args.file, args.name, args.package_set)).steps:
         print(f"{step.action:<8} {step.outputs[next(iter(step.outputs))]}")
     return 0
 
@@ -385,7 +412,11 @@ def cmd_plan(args: argparse.Namespace) -> int:
 def cmd_sandbox_config(args: argparse.Namespace) -> int:
     """Print the OCI configuration of derivation ``args.name`` of ``args.file``. Return 0."""
     api = make_api(args)
-    print(api.sandbox_config(select(api, args.file, args.name)).model_dump_json(indent=2))
+    print(
+        api.sandbox_config(select(api, args.file, args.name, args.package_set)).model_dump_json(
+            indent=2
+        )
+    )
     return 0
 
 
@@ -456,12 +487,14 @@ def cmd_switch(args: argparse.Namespace) -> int:
     mode ``--boot`` or ``--test`` choose.
     """
     api = make_api(args)
-    file, name = args.file, args.name
+    file, name, package_set = args.file, args.name, args.package_set
+    local = not args.daemon and args.remote is None
+    system = load_settings(args.settings).system if local else SystemSettings()
     if file is None:
-        local = not args.daemon and args.remote is None
-        file = load_settings(args.settings).system.description if local else DEFAULT_DESCRIPTION
-        name = "system"
-    drv = select(api, file, name)
+        file, name = system.description, "system"
+    if package_set is None and os.path.isdir(system.package_set):
+        package_set = system.package_set
+    drv = select(api, file, name, package_set)
     mode: SystemMode = "boot" if args.boot else "test" if args.test else "switch"
     if drv.builder == BUILTIN_SYSTEM:
         if args.profile != "system":
@@ -524,6 +557,19 @@ def cmd_activate_boot(args: argparse.Namespace) -> int:
         raise UsageError("lattice activate-boot takes no --daemon, --remote or TLS options")
     lattice = Lattice(load_settings(args.settings), on_event=progress)
     _print_slots(lattice.activate_boot(args.system))
+    return 0
+
+
+def cmd_export_registration(args: argparse.Namespace) -> int:
+    """Print Lattice.export_registration for ``args.paths``. Return 0.
+
+    The library is always used, like ``activate-boot``.
+    """
+    if args.daemon or args.remote is not None or args.ca or args.cert or args.key:
+        raise UsageError("lattice export-registration takes no --daemon, --remote or TLS options")
+    lattice = Lattice(load_settings(args.settings), on_event=progress)
+    sys.stdout.buffer.write(lattice.export_registration(args.paths))
+    sys.stdout.flush()
     return 0
 
 

@@ -12,10 +12,9 @@ from __future__ import annotations
 import os
 
 import pybonsai
-from pybonsai import FrozenMap, Host
+from pybonsai import FrozenMap
 
 from ..errors import EvaluationFailed
-from ..stdlib import build_host
 
 CONFIG_FILE = "config.pyb"
 
@@ -30,8 +29,8 @@ def read_config(description: str | os.PathLike[str]) -> str | None:
         return None
 
 
-def config_host(config_source: str) -> Host:
-    """Return the standard library host whose ``config`` is the options of ``config_source``.
+def config_options(config_source: str) -> FrozenMap:
+    """Return the ``options`` of ``config_source``, which become the name ``config``.
 
     ``config.pyb`` is evaluated on its own with the PyBonsai default host
     and must define the dictionary ``options``. Raises PyBonsaiError if
@@ -41,4 +40,4 @@ def config_host(config_source: str) -> Host:
     options = names.get("options")
     if not isinstance(options, FrozenMap):
         raise EvaluationFailed(f"{CONFIG_FILE}: options must be a dictionary")
-    return build_host(options)
+    return options

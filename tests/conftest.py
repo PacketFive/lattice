@@ -19,7 +19,7 @@ import struct
 import subprocess
 import sys
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
 
 import pytest
@@ -39,6 +39,7 @@ from lattice import (
     PushResult,
     SandboxSettings,
     SlotState,
+    SourceFile,
     SubstitutionResult,
     SystemGeneration,
     SystemMode,
@@ -56,11 +57,19 @@ class FakeAPI:
     def __init__(self, on_event: EventHandler | None) -> None:
         self.on_event = on_event
 
-    def evaluate(self, path: str | os.PathLike[str]) -> Evaluation:
+    def evaluate(
+        self,
+        path: str | os.PathLike[str],
+        package_set: str | os.PathLike[str] | None = None,
+    ) -> Evaluation:
         raise AssertionError("the daemon never evaluates a path")
 
     def evaluate_source(
-        self, source: str, filename: str = "<string>", config_source: str | None = None
+        self,
+        source: str,
+        filename: str = "<string>",
+        config_source: str | None = None,
+        package_set: Sequence[SourceFile] | None = None,
     ) -> Evaluation:
         if config_source == "fail":
             raise EvaluationFailed("config.pyb:1:1: rejected")
@@ -70,6 +79,8 @@ class FakeAPI:
             raise EvaluationFailed(f"{filename}:1:1: rejected")
         if source == "crash":
             raise RuntimeError("secret detail of the daemon machine")
+        if package_set is not None:
+            filename = " ".join([filename, *(layer.filename for layer in package_set)])
         return Evaluation(filename=filename, derivations={}, seconds=0.25)
 
     def build(self, drv: Derivation) -> BuildResult:

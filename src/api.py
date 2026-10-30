@@ -27,7 +27,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from platform import machine
 from typing import TYPE_CHECKING
 
@@ -37,7 +37,14 @@ from pybonsai import FrozenMap, Host, PyBonsaiError
 from . import profiles
 from .derivation import BUILTIN_PROFILE, BUILTIN_SYSTEM, Derivation
 from .errors import ActivationFailed, EvaluationFailed, StoreError
-from .events import EvaluationFinished, EvaluationStarted, EventHandler, ProfileSwitched, emit
+from .events import (
+    ActivationNotice,
+    EvaluationFinished,
+    EvaluationStarted,
+    EventHandler,
+    ProfileSwitched,
+    emit,
+)
 from .kmod import KernelModules, LinuxModules
 from .models import (
     BuildResult,
@@ -46,10 +53,12 @@ from .models import (
     Generation,
     PushResult,
     SlotState,
+    SourceFile,
     SubstitutionResult,
     SystemGeneration,
     SystemMode,
 )
+from .pkgset import evaluate_layers, read_package_set
 from .sandbox import BackendStatus, OciConfig, make_spec, oci_config
 from .sandbox import backend_status as probe_backends
 from .settings import SandboxBackend, Settings
@@ -66,13 +75,14 @@ from .store import (
     content_hash,
     database,
     lock,
+    registration,
 )
 from .store.builder import direct_inputs
 from .store.combine import profile_manifest
 from .system import boot as boot_entries
 from .system.activate import BOOTED, Activation, running_system
 from .system.build import read_system
-from .system.config import config_host, read_config
+from .system.config import config_options, read_config
 from .system.manager import OfflineManager, SystemdManager, SystemManager
 
 TEST_ROOT = "system/test"
@@ -115,6 +125,7 @@ class Lattice:
         self.kernel_modules = kernel_modules if kernel_modules is not None else LinuxModules()
         self.layout = StoreLayout(root=self.settings.store.root, stacks=self.settings.store.stacks)
         self._host: Host | None = None
+        self._package_set: tuple[tuple[SourceFile, ...], dict[str, object]] | None = None
         if system_manager is None:
             system_manager = (
                 SystemdManager() if self.settings.system.root == "/" else OfflineManager()
@@ -126,36 +137,61 @@ class Lattice:
             self._host = build_host()
         return self._host
 
-    def evaluate(self, path: str | os.PathLike[str]) -> Evaluation:
+    def evaluate(
+        self,
+        path: str | os.PathLike[str],
+        package_set: str | os.PathLike[str] | None = None,
+    ) -> Evaluation:
         """Evaluate the PyBonsai file at ``path`` with the standard library. Phase 1.
 
         If the directory of ``path`` holds a ``config.pyb`` written by
         Trellis, its ``options`` mapping is the name ``config`` (RFC 0004
-        section 5.2, Phase 10); otherwise ``config`` is empty. Nothing is
-        built. Raises EvaluationFailed if a file is rejected or fails, and
-        OSError if it cannot be read.
+        section 5.2, Phase 10); otherwise ``config`` is empty. With
+        ``package_set``, the file also sees the public names of the
+        package set in that directory (RFC 0005 section 5.2, Phase 11).
+        Nothing is built. Raises EvaluationFailed if a file is rejected
+        or fails, and OSError if it cannot be read.
         """
         filename = os.fspath(path)
         with open(filename, encoding="utf-8") as file:
             source = file.read()
-        return self.evaluate_source(source, filename, read_config(filename))
+        layers = None if package_set is None else read_package_set(package_set)
+        return self.evaluate_source(source, filename, read_config(filename), layers)
 
     def evaluate_source(
-        self, source: str, filename: str = "<string>", config_source: str | None = None
+        self,
+        source: str,
+        filename: str = "<string>",
+        config_source: str | None = None,
+        package_set: Sequence[SourceFile] | None = None,
     ) -> Evaluation:
         """Evaluate PyBonsai source text, as evaluate does for a file. Phase 1.
 
         ``config_source`` is the text of a ``config.pyb`` whose ``options``
-        become the name ``config``.
+        become the name ``config``. ``package_set`` holds the layers of a
+        package set, in evaluation order. The names of the last package
+        set evaluated are kept, so evaluating several files with the same
+        layers evaluates the layers once.
         """
         emit(self.on_event, EvaluationStarted(filename=filename))
         start = time.perf_counter()
         try:
-            host = self._get_host() if config_source is None else config_host(config_source)
+            if config_source is None and package_set is None:
+                host = self._get_host()
+            else:
+                options = None if config_source is None else config_options(config_source)
+                extra = None if package_set is None else self._package_set_names(package_set)
+                host = build_host(options, extra)
             names = pybonsai.evaluate_source(source, filename, host=host)
         except PyBonsaiError as error:
             raise EvaluationFailed(error) from error
         return self._finish(filename, names, start)
+
+    def _package_set_names(self, layers: Sequence[SourceFile]) -> dict[str, object]:
+        key = tuple(layers)
+        if self._package_set is None or self._package_set[0] != key:
+            self._package_set = (key, evaluate_layers(key))
+        return self._package_set[1]
 
     def _finish(self, filename: str, names: FrozenMap, start: float) -> Evaluation:
         derivations = {str(k): v for k, v in names.items() if isinstance(v, Derivation)}
@@ -456,6 +492,7 @@ class Lattice:
         ``/run/booted-system`` and ``/run/current-system``, its ``/etc``
         and accounts are written, and its stacks fill the slots.
         """
+        self._import_registration()
         if system is not None:
             check_store_path(system)
             activation = Activation(
@@ -473,6 +510,56 @@ class Lattice:
         else:
             profiles.boot(self.layout, self.kernel_modules, {}, self.on_event)
         return profiles.states(self.layout)
+
+    def _import_registration(self) -> None:
+        """Register the paths a disk image holds at its first boot (RFC 0005 section 8.2).
+
+        When ``registration.json`` is in the store's ``var`` directory and
+        the database is empty, every listed path is hashed again and
+        registered, each system generation gets its root, and the file is
+        removed. With paths already registered the file is left and a
+        notice is emitted.
+        """
+        source = registration.registration_path(self.layout)
+        try:
+            with open(source, "rb") as file:
+                data = file.read()
+        except FileNotFoundError:
+            return
+        connection = database.connect(self.layout, create=True)
+        try:
+            with lock.profiles(self.layout):
+                if database.all_paths(connection):
+                    emit(
+                        self.on_event,
+                        ActivationNotice(
+                            text=f"{source} is ignored: the store database is not empty"
+                        ),
+                    )
+                    return
+                paths = registration.import_registration(self.layout, connection, data)
+                for generation in profiles.generations(self.layout, profiles.SYSTEM):
+                    database.add_root(
+                        connection,
+                        profiles.root_name(profiles.SYSTEM, generation.number),
+                        generation.store_path,
+                    )
+            os.unlink(source)
+            emit(self.on_event, ActivationNotice(text=f"registered {len(paths)} store paths"))
+        finally:
+            connection.close()
+
+    def export_registration(self, paths: Iterable[str]) -> bytes:
+        """Return ``registration.json`` for the closure of ``paths`` (RFC 0005 section 8.1).
+
+        Library and command only. Raises StoreError if a path is not
+        registered or is shallow.
+        """
+        connection = self._connect()
+        try:
+            return registration.encode(registration.export(connection, paths))
+        finally:
+            connection.close()
 
     def switch_system(self, drv: Derivation, mode: SystemMode = "switch") -> SystemGeneration:
         """Build the system ``drv`` and activate it (RFC 0004 section 8). Phase 10.

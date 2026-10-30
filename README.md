@@ -75,6 +75,13 @@ generation. A `config.pyb` written by Trellis next to the description is
 read as `config`. With a delegated cgroup, builds also get memory, CPU
 and process limits.
 
+Phase 11: package set and images (RFC 0005), in progress. A package set
+is a directory of layers, `00-bootstrap.pyb` to `90-images.pyb`, each
+evaluated with the names of the layers before it; `lattice switch` reads
+`/etc/pyrixos/pkgs` and the other commands take `--package-set DIR`.
+`closure(drv)` lists the closure of a derivation with the
+`registration.json` an image's first boot imports.
+
 ## Install
 
 ```sh
@@ -149,6 +156,18 @@ lattice rollback                              # or: lattice rollback 41
 lattice delete-generations --keep 5
 lattice slots                                 # active stack, and the next boot's if it differs
 lattice activate-boot                         # run once at boot, before services
+```
+
+A package set (RFC 0005) is a directory of `.pyb` layers evaluated in the
+byte order of their names. Each layer sees the public names of the
+layers before it, may not repeat one of them or a standard library name,
+and keeps names starting with `_` to itself. A file evaluated with the
+set sees its names as if they were standard library names:
+
+```sh
+lattice eval --package-set pkgs hello.pyb
+lattice build --package-set pkgs hello.pyb hello
+lattice export-registration /lattice/store/<hash>-system   # registration.json of its closure
 ```
 
 A whole machine (RFC 0004), as an admin:
@@ -259,6 +278,7 @@ output_mib = 4096     # size of the output device, which caps the outputs
 
 [system]
 description = "/etc/pyrixos/system.pyb"  # what lattice switch uses without FILE
+package_set = "/etc/pyrixos/pkgs"         # lattice switch evaluates with it when it exists
 root = "/"            # a mounted target when an installer prepares a disk
 
 [cache]
@@ -360,6 +380,7 @@ garbage, push and change any root or profile. RFC 0001 section 6.2 is the specif
 | `events.py` | Progress events passed to `on_event` and logged |
 | `derivation.py` | The Pydantic Derivation model, canonical JSON, hashes and store paths |
 | `stdlib.py` | Standard library functions and the PyBonsai host |
+| `pkgset.py` | Package sets: reading layers and evaluating them in order |
 | `protocol.py` | JSON-RPC 2.0 and REST messages, parameters and error codes |
 | `server.py` | Method table, permission checks and request dispatch |
 | `transport.py` | `Daemon`: the HTTP server on the Unix socket and TLS, and caller identification |

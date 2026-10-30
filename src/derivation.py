@@ -50,6 +50,8 @@ BUILTIN_PROFILE = "builtin:profile"
 BUILTIN_UNPACK = "builtin:unpack"
 # Writes a whole system from its description (RFC 0004 section 6).
 BUILTIN_SYSTEM = "builtin:system"
+# Lists the closure of a derivation for disk images (RFC 0005 section 8.1).
+BUILTIN_CLOSURE = "builtin:closure"
 
 _COMPUTED = ("hash", "store_path")
 

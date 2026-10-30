@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Literal
 
 from ..derivation import (
+    BUILTIN_CLOSURE,
     BUILTIN_FETCH_URL,
     BUILTIN_PROFILE,
     BUILTIN_STACK,
@@ -49,6 +50,7 @@ from .combine import combine
 from .fetch import fetch
 from .layout import StoreLayout
 from .realise import realise, remove_tree, scan
+from .registration import build_closure
 from .unpack import unpack
 from .verify import diff_trees
 
@@ -416,6 +418,8 @@ class Builder:
             return unpack(self.layout, drv, os.path.join(work, "out")), None
         if drv.builder == BUILTIN_SYSTEM:
             return build_system(self.layout, drv, os.path.join(work, "out")), None
+        if drv.builder == BUILTIN_CLOSURE:
+            return build_closure(self.layout, drv, os.path.join(work, "out")), None
         name = drv.name
 
         def on_log(text: str) -> None:

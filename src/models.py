@@ -40,6 +40,13 @@ def parse[M: BaseModel](model: type[M], value: object) -> M:
     return model.model_validate_json(json.dumps(value))
 
 
+class SourceFile(Model):
+    """The text of one PyBonsai file and the name its errors report."""
+
+    filename: str
+    source: str
+
+
 class Evaluation(Model):
     """The result of evaluating one PyBonsai file.
 
