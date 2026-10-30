@@ -7,6 +7,8 @@ PyrixOS 1.0.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-30
+
 ### Added
 
 - The standard library function `unpack` and the builder
