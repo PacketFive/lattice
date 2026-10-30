@@ -28,6 +28,7 @@ from .derivation import (
     BUILTIN_FETCH_URL,
     BUILTIN_PROFILE,
     BUILTIN_STACK,
+    BUILTIN_UNPACK,
     Derivation,
     validate_fields,
 )
@@ -48,7 +49,7 @@ FETCH_SCHEMES: frozenset[str] = frozenset({"https", "http"})
 def build_host() -> Host:
     """Return the Host Lattice evaluates every file with.
 
-    Calls pybonsai.make_host with the prelude included, the four functions
+    Calls pybonsai.make_host with the prelude included, the five functions
     below as Builtins under their RFC names, and
     ``{Derivation: DERIVATION_ATTRIBUTES}`` as host types.
     """
@@ -57,6 +58,7 @@ def build_host() -> Host:
         "fetch_url": fetch_url,
         "stack": stack,
         "profile": profile,
+        "unpack": unpack,
     }
     return make_host(
         names={name: Builtin(name, impl) for name, impl in functions.items()},
@@ -98,6 +100,35 @@ def fetch_url(url: str, sha256: str) -> Derivation:
         name=name,
         builder=BUILTIN_FETCH_URL,
         env=FrozenMap({"url": url, "sha256": sha256}),
+    )
+
+
+ARCHIVE_ENDINGS: tuple[str, ...] = (".tar.gz", ".tar.xz", ".tar.bz2", ".tgz", ".txz", ".tar")
+"""Endings ``unpack`` removes from the archive's name, longest first."""
+
+
+def unpacked_name(archive_name: str) -> str:
+    """Return ``archive_name`` without the first matching ARCHIVE_ENDINGS entry."""
+    for ending in ARCHIVE_ENDINGS:
+        if archive_name.endswith(ending) and len(archive_name) > len(ending):
+            return archive_name[: -len(ending)]
+    return archive_name
+
+
+def unpack(archive: Derivation) -> Derivation:
+    """Declare the unpacked content of ``archive`` (RFC 0002 section 5.3).
+
+    ``archive`` must be a derivation whose output is one tar file, such as
+    a fetch_url. The name is the archive's name without its ending, as
+    unpacked_name removes it. Lattice unpacks it itself, so
+    this works before any program is in the store.
+    """
+    if type(archive) is not Derivation:
+        raise TypeError("unpack needs a derivation")
+    return derivation(
+        name=unpacked_name(archive.name),
+        builder=BUILTIN_UNPACK,
+        env=FrozenMap({"archive": archive}),
     )
 
 

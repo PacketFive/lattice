@@ -5,6 +5,14 @@ All notable changes to Lattice are listed here. The format follows
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) while the major version is 0. Lattice reaches 1.0.0 with
 PyrixOS 1.0.
 
+## [Unreleased]
+
+### Added
+
+- The standard library function `unpack` and the builder
+  `builtin:unpack`, which unpack a tar archive into the store outside
+  the sandbox (RFC 0002 Bootstrap).
+
 ## [0.9.0] - 2026-10-29
 
 First release, published on PyPI as `pyrixos-lattice`. It contains

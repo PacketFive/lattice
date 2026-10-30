@@ -46,6 +46,8 @@ BUILTIN_FETCH_URL = "builtin:fetch_url"
 # Builders that combine their inputs into one tree of symlinks (section 13).
 BUILTIN_STACK = "builtin:stack"
 BUILTIN_PROFILE = "builtin:profile"
+# Unpacks an archive outside the sandbox (RFC 0002 section 5.3).
+BUILTIN_UNPACK = "builtin:unpack"
 
 _COMPUTED = ("hash", "store_path")
 

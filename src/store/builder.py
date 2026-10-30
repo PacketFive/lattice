@@ -33,6 +33,7 @@ from ..derivation import (
     BUILTIN_FETCH_URL,
     BUILTIN_PROFILE,
     BUILTIN_STACK,
+    BUILTIN_UNPACK,
     STORE_DIR,
     Derivation,
 )
@@ -46,6 +47,7 @@ from .combine import combine
 from .fetch import fetch
 from .layout import StoreLayout
 from .realise import realise, remove_tree, scan
+from .unpack import unpack
 from .verify import diff_trees
 
 if TYPE_CHECKING:
@@ -408,6 +410,8 @@ class Builder:
             return {"out": destination}, None
         if drv.builder in (BUILTIN_STACK, BUILTIN_PROFILE):
             return combine(self.layout, drv, os.path.join(work, "out")), None
+        if drv.builder == BUILTIN_UNPACK:
+            return unpack(self.layout, drv, os.path.join(work, "out")), None
         name = drv.name
 
         def on_log(text: str) -> None:
