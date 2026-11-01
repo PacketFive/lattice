@@ -7,7 +7,7 @@ Derivation is registered with pybonsai as a host type (see stdlib.py).
 Its hash is the SHA-256 digest of a canonical JSON serialisation, so two
 derivations with the same fields have the same hash on any machine.
 
-Derivation is a frozen Pydantic model, so the library, the daemon and the
+Derivation is a frozen Espalier model, so the library, the daemon and the
 remote API share one definition. In JSON a derivation also carries its
 ``hash`` and ``store_path``, and every input derivation is nested in
 ``env``. When a derivation is read from JSON those two fields are
@@ -24,8 +24,7 @@ import json
 from functools import cached_property
 from typing import Annotated, Any
 
-from pybonsai import FrozenMap
-from pydantic import (
+from espalier import (
     BaseModel,
     ConfigDict,
     ModelWrapValidatorHandler,
@@ -36,6 +35,7 @@ from pydantic import (
     computed_field,
     model_validator,
 )
+from pybonsai import FrozenMap
 
 STORE_DIR = "/lattice/store"
 STORE_HASH_LEN = 32
@@ -110,7 +110,7 @@ def validate_fields(
             raise TypeError(f"derivation env value {key!r} must be a string or a derivation")
 
 
-# Pydantic turns a ValueError raised in a validator into a ValidationError
+# Espalier turns a ValueError raised in a validator into a ValidationError
 # but lets a TypeError escape, so the validators below raise ValueError.
 
 

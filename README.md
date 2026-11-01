@@ -109,8 +109,9 @@ package. Tests import the installed package, so install before running
 them.
 
 Python 3.12 or later is required. The only runtime dependencies are
-PyBonsai, Cloche, [Pydantic](https://docs.pydantic.dev/) 2 and
-[cryptography](https://cryptography.io/) for Ed25519 signatures. The distribution name is
+PyBonsai, Cloche, [Espalier](https://github.com/PacketFive/espalier) for
+the data models and [pyrixos-ed25519](https://github.com/PacketFive/ed25519)
+for Ed25519 signatures, all pure Python. The distribution name is
 `pyrixos-lattice`; the import name is `lattice`. `lattice config` also needs
 [Trellis](https://github.com/PacketFive/trellis), which
 the `config` extra adds.
@@ -320,7 +321,7 @@ else:
 The `lattice` command is a thin wrapper around the `Lattice` class, so a
 program can do everything the command does. `Lattice` reads no settings
 from the machine on its own, keeps no state between calls, returns
-immutable Pydantic data models and raises subclasses of `LatticeError`. The
+immutable Espalier data models and raises subclasses of `LatticeError`. The
 optional `on_event` callable receives a progress event for each step, and
 the same events are logged to the `lattice` logger. The package ships
 type hints (PEP 561). The names in `lattice.__all__` are the public
@@ -374,11 +375,11 @@ garbage, push and change any root or profile. RFC 0001 section 6.2 is the specif
 | Module | Role |
 | --- | --- |
 | `api.py` | The `Lattice` class |
-| `models.py` | Pydantic result models and roles |
+| `models.py` | Result models and roles |
 | `settings.py` | `Settings` and `DaemonSettings`, what one machine uses to build, fetch and serve |
 | `errors.py` | `LatticeError` and its subclasses |
 | `events.py` | Progress events passed to `on_event` and logged |
-| `derivation.py` | The Pydantic Derivation model, canonical JSON, hashes and store paths |
+| `derivation.py` | The Derivation model, canonical JSON, hashes and store paths |
 | `stdlib.py` | Standard library functions and the PyBonsai host |
 | `pkgset.py` | Package sets: reading layers and evaluating them in order |
 | `protocol.py` | JSON-RPC 2.0 and REST messages, parameters and error codes |

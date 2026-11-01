@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
+from espalier import ValidationError
 
 import lattice
 from lattice import (

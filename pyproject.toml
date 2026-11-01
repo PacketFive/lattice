@@ -26,10 +26,10 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "cloche>=1.1,<2",
-  "cryptography>=42",
+  "cloche>=1.2,<2",
   "pybonsai-lang>=1.2,<2",
-  "pydantic>=2.6,<3",
+  "pyrixos-ed25519>=1.0,<2",
+  "pyrixos-espalier>=1.0,<2",
 ]
 
 [project.urls]
@@ -39,7 +39,7 @@ Issues = "https://github.com/PacketFive/lattice/issues"
 
 [project.optional-dependencies]
 # lattice config runs Trellis, the configuration command.
-config = ["trellis-kconfig>=1.0,<2"]
+config = ["trellis-kconfig>=1.1,<2"]
 
 [dependency-groups]
 # Everything the quality gates need, installed with "pip install --group dev"

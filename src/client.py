@@ -32,7 +32,7 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from espalier import BaseModel, TypeAdapter, ValidationError
 
 from .derivation import Derivation
 from .errors import ProtocolError, SettingsError

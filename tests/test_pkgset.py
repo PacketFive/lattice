@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pybonsai import FrozenMap
 
 from lattice import EvaluationFailed, Lattice, Settings, SourceFile, SystemSettings, cli
 from lattice.pkgset import evaluate_layers, read_package_set
@@ -125,9 +126,11 @@ def test_layers_are_evaluated_once_per_set(tmp_path: Path, monkeypatch: pytest.M
     calls: list[int] = []
     real = evaluate_layers
 
-    def counting(layers: tuple[SourceFile, ...]) -> dict[str, object]:
+    def counting(
+        layers: tuple[SourceFile, ...], config: FrozenMap | None = None
+    ) -> dict[str, object]:
         calls.append(len(layers))
-        return real(layers)
+        return real(layers, config)
 
     monkeypatch.setattr("lattice.api.evaluate_layers", counting)
     lattice = Lattice(Settings())
@@ -136,7 +139,21 @@ def test_layers_are_evaluated_once_per_set(tmp_path: Path, monkeypatch: pytest.M
     lattice.evaluate_source("x = sh", "x.pyb", None, first)
     lattice.evaluate_source("y = sh", "y.pyb", None, first)
     lattice.evaluate_source("z = more", "z.pyb", None, second)
-    assert calls == [1, 1]
+    lattice.evaluate_source("z = more", "z.pyb", "options = {'a': 1}", second)
+    lattice.evaluate_source("z = more", "z.pyb", "options = {'a': 1}", second)
+    assert calls == [1, 1, 1]
+
+
+def test_layers_see_the_config(tmp_path: Path) -> None:
+    lattice = Lattice(Settings())
+    layer = SourceFile(
+        filename="arch.pyb", source="ARCH = config.get('arch', 'x86_64')\nmine = tool(ARCH)\n"
+    )
+    layers = (SourceFile(filename="tool.pyb", source=BASE), layer)
+    default = lattice.evaluate_source("x = mine", "x.pyb", None, layers)
+    riscv = lattice.evaluate_source("x = mine", "x.pyb", "options = {'arch': 'riscv64'}", layers)
+    assert default.derivations["x"].name == "x86_64"
+    assert riscv.derivations["x"].name == "riscv64"
 
 
 def test_a_description_may_shadow_a_set_name(tmp_path: Path) -> None:

@@ -43,7 +43,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from espalier import BaseModel, ValidationError
 
 from .client import LatticeAPI
 from .errors import PermissionDenied

@@ -28,7 +28,7 @@ from collections.abc import Callable
 
 import cloche
 from cloche import Backend, BackendStatus, OciConfig, SandboxJob, SandboxSpec, oci_config
-from pydantic import ValidationError
+from espalier import ValidationError
 
 from .derivation import STORE_DIR, Derivation
 from .errors import BackendUnavailable, BuildFailed

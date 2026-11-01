@@ -19,7 +19,7 @@ from __future__ import annotations
 import os
 import re
 
-from pydantic import field_validator
+from espalier import field_validator
 
 from ..derivation import BUILTIN_PROFILE, BUILTIN_STACK, Derivation
 from ..errors import BuildFailed, StoreError

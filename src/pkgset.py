@@ -8,7 +8,9 @@ name that an earlier layer or the standard library already has, and a
 name starting with ``_`` stays private to its layer. A file evaluated
 with the set sees its public names as if they were standard library
 names. Lattice and Client read the layers; the daemon receives their
-text and never reads caller files.
+text and never reads caller files. The layers see the same ``config``
+as the file evaluated with them, so that a Trellis option such as the
+target architecture can select what the set builds.
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ import os
 from collections.abc import Sequence
 
 import pybonsai
-from pybonsai import PyBonsaiError
+from pybonsai import FrozenMap, PyBonsaiError
 
 from .errors import EvaluationFailed
 from .models import SourceFile
@@ -47,18 +49,22 @@ def read_package_set(directory: str | os.PathLike[str]) -> tuple[SourceFile, ...
     return tuple(layers)
 
 
-def evaluate_layers(layers: Sequence[SourceFile]) -> dict[str, object]:
+def evaluate_layers(
+    layers: Sequence[SourceFile], config: FrozenMap | None = None
+) -> dict[str, object]:
     """Evaluate ``layers`` in order and return the public names of the set.
+
+    Every layer sees ``config`` as the name ``config``, empty if None.
 
     Raises EvaluationFailed if a layer is rejected or fails, or if it
     defines a name that the standard library or an earlier layer has,
     naming both places.
     """
-    base = build_host()
+    base = build_host(config)
     names: dict[str, object] = {}
     origin: dict[str, str] = {}
     for layer in layers:
-        host = build_host(extra=names) if names else base
+        host = build_host(config, names) if names else base
         try:
             result = pybonsai.evaluate_source(layer.source, layer.filename, host=host)
         except PyBonsaiError as error:

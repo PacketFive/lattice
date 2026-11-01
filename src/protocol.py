@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, NoReturn
 
-from pydantic import BaseModel, ConfigDict, Field
+from espalier import BaseModel, ConfigDict, Field
 
 from . import errors
 from .derivation import Derivation

@@ -165,8 +165,8 @@ def test_spec_rejects_builder(builder: str, message: str) -> None:
 
 
 def test_spec_rejects_unknown_machine() -> None:
-    with pytest.raises(BackendUnavailable, match="riscv64"):
-        spec_of(hello(), machine="riscv64")
+    with pytest.raises(BackendUnavailable, match="s390x"):
+        spec_of(hello(), machine="s390x")
 
 
 def test_oci_config() -> None:

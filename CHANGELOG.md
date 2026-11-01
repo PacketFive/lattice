@@ -7,6 +7,27 @@ PyrixOS 1.0.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-31
+
+The first part of Phase 12 of the PyrixOS development plan,
+architectures, image formats and boot loaders (RFC 0006).
+
+### Changed
+
+- The layers of a package set see the same `config` as the file
+  evaluated with them, the `options` of the `config.pyb` next to that
+  file, so that a Trellis option such as `ARCH` selects what the set
+  builds. The names of a set are kept for one set and one `config`.
+- The `kernel` link of a system names `bzImage` or, for riscv64 and
+  arm64 kernels, `Image` in the kernel output; a kernel output with
+  neither fails the system build.
+- Lattice is pure Python. Models use Espalier (`pyrixos-espalier`) in
+  place of Pydantic, and cache signatures use `pyrixos-ed25519` in place
+  of `cryptography`, so no Rust or C extension is installed with it.
+  Signatures and keys are unchanged.
+- A nested settings model is validated by the outer model, without the
+  `__pydantic_base_init__` marker on its `__init__`.
+
 ## [0.12.0] - 2026-10-31
 
 The first part of Phase 11 of the PyrixOS development plan, package set

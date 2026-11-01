@@ -16,7 +16,7 @@ from __future__ import annotations
 import base64
 from typing import Literal, Self
 
-from pydantic import Field, ValidationError, field_validator, model_validator
+from espalier import Field, ValidationError, field_validator, model_validator
 
 from ..derivation import STORE_HASH_LEN
 from ..errors import SubstitutionFailed

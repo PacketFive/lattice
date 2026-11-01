@@ -6,7 +6,7 @@ one Event per step, for example to drive its own progress display. Every
 event is also logged to the ``lattice`` logger at DEBUG level, so a program
 that only configures logging sees the same steps.
 
-Events are immutable Pydantic models. The ``type`` field names the event,
+Events are immutable Espalier models. The ``type`` field names the event,
 so the daemon can send events to a client as JSON and the client can
 rebuild the same objects.
 """
@@ -17,7 +17,7 @@ import logging
 from collections.abc import Callable
 from typing import Annotated, Literal
 
-from pydantic import Field, TypeAdapter
+from espalier import Field, TypeAdapter
 
 from .models import Model
 

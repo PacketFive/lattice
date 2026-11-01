@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 """The dependency database (RFC 0001 sections 11, 12, 14.8 and 14.9).
 
-The SQL is plain ``sqlite3``. Rows leave this module as the Pydantic
+The SQL is plain ``sqlite3``. Rows leave this module as the Espalier
 models StorePathInfo and GCRootInfo, and enter it as Registration, so the
 rest of Lattice never handles a database row.
 

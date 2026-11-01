@@ -11,8 +11,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from espalier import BaseModel, ValidationError
 from pybonsai import FrozenMap
-from pydantic import BaseModel, ValidationError
 
 from lattice import (
     ActivationDeferred,

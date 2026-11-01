@@ -30,7 +30,7 @@ import os
 import uuid
 from collections.abc import Callable
 
-from pydantic import ValidationError
+from espalier import ValidationError
 
 from ..errors import ActivationFailed
 from ..models import Model

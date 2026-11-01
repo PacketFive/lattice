@@ -24,8 +24,8 @@ import urllib.parse
 from collections.abc import Callable, Mapping
 from functools import partial
 
+from espalier import ValidationError
 from pybonsai import Builtin, FrozenMap, Host, make_host
-from pydantic import ValidationError
 
 from .derivation import (
     BUILTIN_CLOSURE,

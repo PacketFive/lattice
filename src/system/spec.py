@@ -17,7 +17,7 @@ import posixpath
 import re
 from typing import Self
 
-from pydantic import Field, ValidationError, field_validator, model_validator
+from espalier import Field, ValidationError, field_validator, model_validator
 
 from ..derivation import STORE_DIR
 from ..models import Model

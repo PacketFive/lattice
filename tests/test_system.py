@@ -13,8 +13,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from espalier import BaseModel, ValidationError
 from pybonsai import FrozenMap
-from pydantic import BaseModel, ValidationError
 
 from lattice import (
     ActivationFailed,
@@ -39,16 +39,17 @@ from lattice import (
     SystemSettings,
     cli,
 )
-from lattice.derivation import BUILTIN_SYSTEM
+from lattice.derivation import BUILTIN_SYSTEM, STORE_DIR
 from lattice.protocol import NoParams, RollbackSystemParams, SwitchSystemParams
 from lattice.server import authorize
 from lattice.stdlib import etc_file, file_system, group, machine, service, user
 from lattice.store import database
+from lattice.store.layout import StoreLayout
 from lattice.store.realise import realise
 from lattice.system import boot
 from lattice.system import manager as manager_module
 from lattice.system.accounts import read_ids
-from lattice.system.build import read_system, system_spec
+from lattice.system.build import _kernel, read_system, system_spec
 from lattice.system.config import CONFIG_FILE, read_config
 from lattice.system.manager import SystemdManager
 from lattice.transport import Daemon
@@ -398,6 +399,23 @@ def test_fixed_numbers_must_be_free(lattice: Lattice) -> None:
     (etc / "passwd").write_text("sysd:x:1500:100::/:/bin/false\n")
     with pytest.raises(ActivationFailed, match="uid 1500 of 'alice' is already used by 'sysd'"):
         lattice.switch_system(host(users=(user("alice", uid=1500),)))
+
+
+@pytest.mark.parametrize("name", ["bzImage", "Image"])
+def test_kernel_image_names(tmp_path: Path, name: str) -> None:
+    layout = StoreLayout(root=str(tmp_path))
+    kernel = f"{STORE_DIR}/{'k' * 32}-linux"
+    os.makedirs(layout.physical(kernel))
+    Path(layout.physical(kernel), name).write_bytes(b"kernel")
+    assert _kernel(layout, kernel) == f"{kernel}/{name}"
+
+
+def test_kernel_without_image(tmp_path: Path) -> None:
+    layout = StoreLayout(root=str(tmp_path))
+    kernel = f"{STORE_DIR}/{'k' * 32}-linux"
+    os.makedirs(layout.physical(kernel))
+    with pytest.raises(BuildFailed, match="holds no kernel image"):
+        _kernel(layout, kernel)
 
 
 def test_activate_boot_with_a_system(lattice: Lattice) -> None:

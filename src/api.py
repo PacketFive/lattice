@@ -125,7 +125,9 @@ class Lattice:
         self.kernel_modules = kernel_modules if kernel_modules is not None else LinuxModules()
         self.layout = StoreLayout(root=self.settings.store.root, stacks=self.settings.store.stacks)
         self._host: Host | None = None
-        self._package_set: tuple[tuple[SourceFile, ...], dict[str, object]] | None = None
+        self._package_set: (
+            tuple[tuple[tuple[SourceFile, ...], FrozenMap | None], dict[str, object]] | None
+        ) = None
         if system_manager is None:
             system_manager = (
                 SystemdManager() if self.settings.system.root == "/" else OfflineManager()
@@ -169,8 +171,9 @@ class Lattice:
 
         ``config_source`` is the text of a ``config.pyb`` whose ``options``
         become the name ``config``. ``package_set`` holds the layers of a
-        package set, in evaluation order. The names of the last package
-        set evaluated are kept, so evaluating several files with the same
+        package set, in evaluation order; the layers see the same
+        ``config``. The names of the last package set and options
+        evaluated are kept, so evaluating several files with the same
         layers evaluates the layers once.
         """
         emit(self.on_event, EvaluationStarted(filename=filename))
@@ -180,17 +183,21 @@ class Lattice:
                 host = self._get_host()
             else:
                 options = None if config_source is None else config_options(config_source)
-                extra = None if package_set is None else self._package_set_names(package_set)
+                extra = (
+                    None if package_set is None else self._package_set_names(package_set, options)
+                )
                 host = build_host(options, extra)
             names = pybonsai.evaluate_source(source, filename, host=host)
         except PyBonsaiError as error:
             raise EvaluationFailed(error) from error
         return self._finish(filename, names, start)
 
-    def _package_set_names(self, layers: Sequence[SourceFile]) -> dict[str, object]:
-        key = tuple(layers)
+    def _package_set_names(
+        self, layers: Sequence[SourceFile], options: FrozenMap | None
+    ) -> dict[str, object]:
+        key = (tuple(layers), options)
         if self._package_set is None or self._package_set[0] != key:
-            self._package_set = (key, evaluate_layers(key))
+            self._package_set = (key, evaluate_layers(key[0], options))
         return self._package_set[1]
 
     def _finish(self, filename: str, names: FrozenMap, start: float) -> Evaluation:

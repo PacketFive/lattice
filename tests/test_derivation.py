@@ -6,8 +6,8 @@ import re
 import warnings
 
 import pytest
+from espalier import ValidationError
 from pybonsai import FrozenMap
-from pydantic import ValidationError
 
 from lattice.derivation import (
     Derivation,

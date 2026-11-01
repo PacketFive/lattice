@@ -101,7 +101,7 @@ from .store import BuildPlan, GCRootInfo, PlannedStep, StorePathInfo, VerifyResu
 from .system.manager import OfflineManager, SystemdManager, SystemManager
 from .transport import Daemon
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 
 __all__ = [
     "ActivationDeferred",

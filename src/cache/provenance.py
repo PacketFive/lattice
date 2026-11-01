@@ -17,7 +17,7 @@ import base64
 import binascii
 from typing import Literal
 
-from pydantic import ConfigDict, Field
+from espalier import ConfigDict, Field
 
 from ..errors import SubstitutionFailed
 from ..models import Model

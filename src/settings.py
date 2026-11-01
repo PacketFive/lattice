@@ -6,7 +6,7 @@ machine unless the program calls Settings.load. Evaluation limits are not
 settings: section 7.7 fixes them per release so that a file evaluates the
 same way on every machine.
 
-An invalid value raises SettingsError, never a Pydantic error, so a
+An invalid value raises SettingsError, never an Espalier error, so a
 program only has to catch LatticeError.
 """
 
@@ -20,7 +20,7 @@ import tomllib
 import urllib.parse
 from typing import TYPE_CHECKING, Any, Literal, Self, get_args
 
-from pydantic import Field, ValidationError, model_validator
+from espalier import Field, ValidationError, model_validator
 
 from .errors import SettingsError
 from .models import Model, Role, parse
@@ -45,6 +45,8 @@ def _settings_error(error: ValidationError) -> SettingsError:
 
 
 class _SettingsModel(Model):
+    # A nested settings model is validated by the outer model, in the mode
+    # of the outer call (JSON for a file), without calling this method.
     if not TYPE_CHECKING:
 
         def __init__(self, **data: Any) -> None:
@@ -52,11 +54,6 @@ class _SettingsModel(Model):
                 super().__init__(**data)
             except ValidationError as error:
                 raise _settings_error(error) from None
-
-        # Marks __init__ as Pydantic's own, so a nested settings model is
-        # validated in the mode of the outer call (JSON for a file) instead
-        # of through this method in Python mode, which refuses lists.
-        __init__.__pydantic_base_init__ = True
 
 
 class ClientGrant(_SettingsModel):

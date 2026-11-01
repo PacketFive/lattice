@@ -4,7 +4,7 @@
 import json
 
 import pytest
-from pydantic import ValidationError
+from espalier import ValidationError
 
 from lattice import (
     BuildFailed,

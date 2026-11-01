@@ -34,7 +34,9 @@ from .spec import SystemSpec
 
 SYSTEM_MANIFEST = "lattice-system.json"
 CURRENT_SYSTEM = "/run/current-system"
-KERNEL_IMAGE = "bzImage"
+# The file name of the kernel image in a kernel output directory: the
+# x86 bzImage, or the Image of riscv64 and arm64.
+KERNEL_IMAGES = ("bzImage", "Image")
 INITRD_IMAGE = "initrd"
 UNITS = "etc/systemd/system"
 WANTS = "multi-user.target.wants"
@@ -87,6 +89,20 @@ def _image(layout: StoreLayout, path: str, name: str) -> str:
     """Return ``path``, or ``path/name`` if the output is a directory."""
     physical = layout.physical(path)
     return f"{path}/{name}" if os.path.isdir(physical) else path
+
+
+def _kernel(layout: StoreLayout, path: str) -> str:
+    """Return ``path``, or the first of KERNEL_IMAGES in it if it is a directory.
+
+    Raises BuildFailed if the directory holds none of them.
+    """
+    physical = layout.physical(path)
+    if not os.path.isdir(physical):
+        return path
+    for name in KERNEL_IMAGES:
+        if os.path.isfile(os.path.join(physical, name)):
+            return f"{path}/{name}"
+    raise BuildFailed(f"{path} holds no kernel image ({', '.join(KERNEL_IMAGES)})")
 
 
 def _write(path: str, text: str, mode: int = 0o444) -> None:
@@ -202,7 +218,7 @@ def build_system(layout: StoreLayout, drv: Derivation, destination: str) -> dict
     )
     os.symlink(spec.sw, os.path.join(destination, "sw"))
     if spec.kernel is not None:
-        os.symlink(_image(layout, spec.kernel, KERNEL_IMAGE), os.path.join(destination, "kernel"))
+        os.symlink(_kernel(layout, spec.kernel), os.path.join(destination, "kernel"))
     if spec.initrd is not None:
         os.symlink(_image(layout, spec.initrd, INITRD_IMAGE), os.path.join(destination, "initrd"))
     _write(os.path.join(destination, "kernel-params"), " ".join(spec.kernel_params) + "\n")

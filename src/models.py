@@ -2,7 +2,7 @@
 """Data models shared by the library, the daemon and the remote API.
 
 Every value a Lattice method returns, and every value the daemon sends or
-receives, is a Pydantic model from this module, settings.py, events.py or
+receives, is an Espalier model from this module, settings.py, events.py or
 protocol.py (RFC 0001 sections 6.1 and 6.2). The daemon validates a request
 with the same model the client used to build it, and the client validates
 the reply with the same model the daemon used to send it.
@@ -17,7 +17,7 @@ import enum
 import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from espalier import BaseModel, ConfigDict
 
 from .derivation import Derivation
 

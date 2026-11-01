@@ -15,8 +15,7 @@ import binascii
 import os
 from collections.abc import Iterable
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from pyrixos_ed25519 import BadSignatureError, SigningKey, VerifyingKey
 
 from ..errors import SettingsError
 from ..settings import KEY_NAME
@@ -39,7 +38,7 @@ class SecretKey:
     def __init__(self, name: str, seed: bytes) -> None:
         """Hold the key made from the 32-byte ``seed``."""
         self.name = name
-        self._key = Ed25519PrivateKey.from_private_bytes(seed)
+        self._key = SigningKey(seed)
 
     @classmethod
     def parse(cls, text: str) -> SecretKey:
@@ -57,12 +56,12 @@ class SecretKey:
 
     def public(self) -> str:
         """Return the public key as ``<name>:<base64>``."""
-        raw = self._key.public_key().public_bytes_raw()
+        raw = self._key.verifying_key.encoded
         return f"{self.name}:{base64.b64encode(raw).decode()}"
 
     def text(self) -> str:
         """Return the secret key as ``<name>:<base64 seed>``."""
-        return f"{self.name}:{base64.b64encode(self._key.private_bytes_raw()).decode()}"
+        return f"{self.name}:{base64.b64encode(self._key.seed).decode()}"
 
     def sign(self, data: bytes) -> str:
         """Return the signature of ``data`` as ``<name>:<base64>``."""
@@ -100,8 +99,8 @@ def verify(trusted: Iterable[str], data: bytes, signatures: Iterable[str]) -> st
             continue
         for raw_key in keys.get(name, ()):
             try:
-                Ed25519PublicKey.from_public_bytes(raw_key).verify(raw_signature, data)
-            except InvalidSignature:
+                VerifyingKey(raw_key).verify(raw_signature, data)
+            except (BadSignatureError, ValueError):
                 continue
             return f"{name}:{base64.b64encode(raw_key).decode()}"
     return None
