@@ -13,6 +13,8 @@ PyrixOS 1.0.
 
 - The package metadata names Weqaar Janjua as the author, with PacketFive
   as the maintainer.
+- The quality gates run with coldframe from PyPI, the new name of
+  pybootstrap, and read their settings from `[tool.coldframe]`.
 
 ## [0.13.0] - 2026-10-31
 

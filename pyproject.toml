@@ -44,11 +44,9 @@ config = ["trellis-kconfig>=1.1,<2"]
 
 [dependency-groups]
 # Everything the quality gates need, installed with "pip install --group dev"
-# (pip 25.1 or later). Groups are not part of the package metadata, so the
-# pybootstrap name on PyPI, which belongs to an unrelated placeholder, can be
-# replaced by its repository here.
+# (pip 25.1 or later).
 dev = [
-  "pybootstrap @ git+https://github.com/packetfive/pybootstrap.git",
+  "coldframe>=0.1",
   "ruff>=0.4",
   "pyright>=1.1",
   "pytest>=8",
@@ -70,9 +68,9 @@ package-dir = { lattice = "src" }
 [tool.setuptools.package-data]
 lattice = ["py.typed"]
 
-# Quality gates, run with 'pybootstrap check'. Sources, line length and
+# Quality gates, run with 'coldframe check'. Sources, line length and
 # test paths are read from the tool tables below.
-[tool.pybootstrap]
+[tool.coldframe]
 gates = ["format", "lint", "typecheck", "test"]
 coverage-min = 80
 coverage-package = "lattice"

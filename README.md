@@ -96,10 +96,10 @@ the components:
 python -m pip install --upgrade "pip>=25.1"
 pip install --group dev
 pip install --config-settings editable_mode=strict -e ../pybonsai -e ../cloche -e ../trellis -e .
-pybootstrap check
+coldframe check
 ```
 
-The `dev` dependency group installs [pybootstrap](https://github.com/packetfive/pybootstrap)
+The `dev` dependency group installs [coldframe](https://pypi.org/project/coldframe/)
 and the tools its gates drive (ruff, pyright, pytest with coverage).
 
 The repository's `src` directory is the package itself, mapped to its
