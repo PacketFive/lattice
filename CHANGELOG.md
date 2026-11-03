@@ -7,6 +7,13 @@ PyrixOS 1.0.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-02
+
+### Changed
+
+- The package metadata names Weqaar Janjua as the author, with PacketFive
+  as the maintainer.
+
 ## [0.13.0] - 2026-10-31
 
 The first part of Phase 12 of the PyrixOS development plan,
