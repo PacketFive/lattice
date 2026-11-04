@@ -156,13 +156,23 @@ def init_script(spec: SystemSpec, system: str) -> str:
     )
 
 
-def _profile(slots: list[str]) -> str:
+def _profile(slots: list[str], profile_d: bool) -> str:
     lines = [
         "# Written by Lattice from the system description.",
         f"PATH={CURRENT_SYSTEM}/sw/bin",
     ]
     lines += [f'PATH="$PATH:{DEFAULT_STACKS}/{slot}/bin"' for slot in slots]
-    lines += ["export PATH", ""]
+    lines += ["export PATH"]
+    # Only systems with files in profile.d source it, so the profile of
+    # every other system stays as it was.
+    if profile_d:
+        lines += [
+            "for file in /etc/profile.d/*.sh; do",
+            '    [ -r "$file" ] && . "$file"',
+            "done",
+            "unset file",
+        ]
+    lines += [""]
     return "\n".join(lines)
 
 
@@ -175,7 +185,8 @@ def write_etc(spec: SystemSpec, etc: str, slots: list[str]) -> None:
     _write(os.path.join(etc, "hostname"), spec.host_name + "\n")
     _link(f"{spec.sw}/share/zoneinfo/{spec.time_zone}", os.path.join(etc, "localtime"))
     _write(os.path.join(etc, "locale.conf"), "LANG=C.UTF-8\n")
-    _write(os.path.join(etc, "profile"), _profile(slots))
+    profile_d = any(e.path.startswith("profile.d/") for e in spec.etc)
+    _write(os.path.join(etc, "profile"), _profile(slots, profile_d))
     libraries = "".join(f"{DEFAULT_STACKS}/{slot}/lib\n" for slot in slots)
     _write(os.path.join(etc, "ld.so.conf.d", "lattice-stacks.conf"), libraries)
     _write(os.path.join(etc, "pyrixos", "system-users.json"), accounts_json(spec))

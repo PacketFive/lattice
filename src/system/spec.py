@@ -317,7 +317,13 @@ class SystemSpec(Model):
     file_systems: tuple[FileSystemSpec, ...] = ()
     services: tuple[ServiceSpec, ...] = ()
     etc: tuple[EtcFileSpec, ...] = ()
+    root_shell: str | None = None
     config: dict[str, object] = {}
+
+    @field_validator("root_shell")
+    @classmethod
+    def _check_root_shell(cls, value: str | None) -> str | None:
+        return None if value is None else _absolute(value, "root_shell")
 
     @model_validator(mode="after")
     def _check(self) -> Self:
@@ -358,10 +364,15 @@ class SystemSpec(Model):
         return self
 
     def canonical_json(self) -> str:
-        """Serialise with sorted keys and no whitespace, as ``machine`` stores it."""
-        return json.dumps(
-            self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), ensure_ascii=False
-        )
+        """Serialise with sorted keys and no whitespace, as ``machine`` stores it.
+
+        ``root_shell`` is left out while it is None, so systems that do not
+        set it keep the store paths they had before it existed.
+        """
+        data = self.model_dump(mode="json")
+        if data["root_shell"] is None:
+            del data["root_shell"]
+        return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
     @property
     def root_file_system(self) -> FileSystemSpec | None:

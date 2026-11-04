@@ -78,6 +78,7 @@ def host(
     file_systems: tuple[FrozenMap, ...] = (),
     host_name: str = "host",
     kernel: Derivation | None = KERNEL,
+    root_shell: str | None = None,
 ) -> Derivation:
     return machine(
         "host",
@@ -93,6 +94,7 @@ def host(
         services=services,
         etc=etc,
         host_name=host_name,
+        root_shell=root_shell,
         config=NO_CONFIG,
     )
 
@@ -210,6 +212,12 @@ def test_machine_records_the_system() -> None:
         (lambda: plain_machine(1), TypeError, "name must be a string"),  # pyright: ignore[reportArgumentType]
         (lambda: plain_machine("m", host_name="-bad"), ValueError, "not a valid host name"),
         (lambda: plain_machine("m", users=(user("root"),)), ValueError, "created by Lattice"),
+        (lambda: plain_machine("m", root_shell="bash"), ValueError, "normalised absolute path"),
+        (
+            lambda: plain_machine("m", root_shell="/lattice/store/" + "a" * 32 + "-bash/bin/bash"),
+            ValueError,
+            "user 'root' runs",
+        ),
         (lambda: plain_machine("m", etc=(etc_file("passwd", text="x"),)), ValueError, "written by"),
         (lambda: user("Bad Name"), ValueError, "not a valid"),
         (lambda: service("x", "/bin/sh"), ValueError, "must start with a store path"),
@@ -219,6 +227,24 @@ def test_machine_records_the_system() -> None:
 def test_machine_errors(call: Callable[[], object], error: type[Exception], match: str) -> None:
     with pytest.raises(error, match=match):
         call()
+
+
+def test_root_shell_and_profile_d(lattice: Lattice) -> None:
+    spec = FIRST.env["system"]
+    assert isinstance(spec, str)
+    assert "root_shell" not in spec
+    first = lattice.switch_system(FIRST).store_path
+    etc = root(lattice) / "etc"
+    assert table(etc / "passwd")["root"][6] == "/run/current-system/sw/bin/sh"
+    profile = Path(lattice.layout.physical(first)) / "etc/profile"
+    assert "profile.d" not in profile.read_text()
+
+    bash = "/run/current-system/sw/bin/bash"
+    prompt = etc_file("profile.d/prompt.sh", text="PS1='# '\n")
+    second = lattice.switch_system(host(root_shell=bash, etc=(prompt,))).store_path
+    assert table(etc / "passwd")["root"][6] == bash
+    profile = Path(lattice.layout.physical(second)) / "etc/profile"
+    assert '. "$file"' in profile.read_text()
 
 
 def test_machine_needs_config() -> None:

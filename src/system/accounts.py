@@ -192,6 +192,8 @@ def write_accounts(root: str, spec: SystemSpec, manager: SystemManager, notice: 
         gid = BUILTIN_GROUPS["root" if name == "root" else "nogroup"]
         passwd.setdefault(name, [name, "x", str(uid), str(gid), name, home, shell])
         shadow.setdefault(name, [name, "!", "", "", "", "", "", "", ""])
+    if spec.root_shell is not None:
+        passwd["root"][6] = spec.root_shell
 
     group_owners = {
         _int(parts[2], "gid"): name for name, parts in groups.items() if name not in wanted_groups

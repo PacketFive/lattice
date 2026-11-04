@@ -7,6 +7,19 @@ PyrixOS 1.0.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-04
+
+### Added
+
+- `machine(root_shell=...)` sets the login shell of `root`, an absolute
+  path that a package of the system provides, such as
+  `/run/current-system/sw/bin/bash`. Activation writes it to `passwd`
+  every time it runs. Without it `root` keeps `/run/current-system/sw/bin/sh`,
+  and the hash of the system is unchanged.
+- `/etc/profile` sources each `/etc/profile.d/*.sh` when the system has
+  an `etc_file` under `profile.d/`, so a description can set a prompt or
+  other shell settings.
+
 ## [0.13.1] - 2026-11-02
 
 ### Changed

@@ -423,6 +423,7 @@ def machine(
     host_name: str = "pyrixos",
     time_zone: str = "UTC",
     kernel_params: tuple[str, ...] = (),
+    root_shell: str | None = None,
     *,
     config: FrozenMap,
 ) -> Derivation:
@@ -434,7 +435,9 @@ def machine(
     profile and every ``etc_file`` source are inputs in ``env``. Every
     store path that a service or a user's shell names must be an output
     of a package or of a stack's contents, so the system holds what it
-    runs.
+    runs. ``root_shell``, when given, is root's login shell, set on every
+    activation; without it root keeps the shell it has, ``sh`` on a new
+    system.
     """
     if type(name) is not str:
         raise TypeError("machine name must be a string")
@@ -458,6 +461,7 @@ def machine(
                 "file_systems": plain(_records("file_systems", file_systems, "file_system")),
                 "services": plain(_records("services", services, "service")),
                 "etc": plain(etc_records),
+                "root_shell": root_shell,
                 "config": plain(config),
             }
         )
@@ -473,6 +477,8 @@ def machine(
     provided = _provided([*packages, *contents])
     used = [(f"service {s.name!r}", s.exec_start) for s in spec.services]
     used += [(f"user {u.name!r}", u.shell) for u in spec.users]
+    if spec.root_shell is not None:
+        used.append(("user 'root'", spec.root_shell))
     for who, command in used:
         for path in STORE_REFERENCE.findall(command):
             if path not in provided:
